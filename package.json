@@ -2,7 +2,7 @@
   "name": "ai-fleet-status",
   "displayName": "AI Fleet Status",
   "description": "Status bar monitor for background AI CLI agent processes (Codex, Claude Code, Gemini CLI, and more) — user-configurable, cross-platform, zero dependencies.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "local",
   "license": "MIT",
   "private": true,
@@ -78,13 +78,13 @@
             {
               "name": "Claude Code",
               "processNames": ["claude.exe", "claude"],
-              "actionKeywords": ["-p", "--print"],
+              "actionKeywords": ["-p", "--print(?:=[^\\s\"']*)?"],
               "nodeIdentityFragments": ["claude", "claude.cmd", "claude.exe", "@anthropic-ai/claude-code"]
             },
             {
               "name": "Gemini CLI",
               "processNames": ["gemini.exe", "gemini"],
-              "actionKeywords": ["-p", "--prompt"],
+              "actionKeywords": ["-p", "--prompt(?:=[^\\s\"']*)?"],
               "nodeIdentityFragments": ["gemini", "gemini.cmd", "@google/gemini-cli", "bundle/gemini.js"]
             },
             {

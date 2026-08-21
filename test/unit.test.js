@@ -4,9 +4,9 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { parseJsonWithControlCharacterFallback, escapeRawControlCharactersInJsonStrings } = require('../lib/json-parse');
-const { compileTools, DEFAULT_TOOLS } = require('../lib/tool-config');
+const { compileTools, DEFAULT_TOOLS, boundedPathRegex } = require('../lib/tool-config');
 const { classifyPrimary, buildTasksByTool, buildChains } = require('../lib/process-chains');
-const { parsePsOutput } = require('../lib/process-list');
+const { _internal: { parseCommLines, parseArgsLines, mergeUnixRows, basename } } = require('../lib/process-list');
 
 describe('json-parse', () => {
   test('parses well-formed JSON unchanged', () => {
@@ -79,6 +79,23 @@ describe('tool-config', () => {
     assert.ok(tool.actionRegex.test('codex.exe exec "prompt"'));
     assert.equal(tool.actionRegex.test('codex.exe --mode=execute'), false);
   });
+
+  test('[regression] Claude Code and Gemini CLI defaults match the attached --flag=value form', () => {
+    const [claude, gemini] = compileTools(
+      DEFAULT_TOOLS.filter((t) => t.name === 'Claude Code' || t.name === 'Gemini CLI')
+    );
+    assert.ok(claude.actionRegex.test('claude.exe --print="summarize this"'));
+    assert.ok(gemini.actionRegex.test('gemini.exe --prompt="summarize this"'));
+  });
+
+  test('[regression] boundedPathRegex matches a fragment authored with "/" against a real backslash path', () => {
+    // Fragments are authored with forward slashes for readability (e.g.
+    // "bundle/gemini.js"), but a real Windows command line uses backslashes for that
+    // same path segment. Both directions must match.
+    const regex = boundedPathRegex(['bundle/gemini.js']);
+    assert.ok(regex.test('node C:\\npm\\node_modules\\@google\\gemini-cli\\bundle\\gemini.js -p "x"'));
+    assert.ok(regex.test('node /usr/lib/node_modules/@google/gemini-cli/bundle/gemini.js -p "x"'));
+  });
 });
 
 describe('process-chains', () => {
@@ -138,24 +155,66 @@ describe('process-chains', () => {
     assert.deepEqual(tasksByTool.get('Codex'), []);
     assert.deepEqual(tasksByTool.get('Hermes'), []);
   });
+
+  test('[regression] two identical-length duplicate chains for the same process are deduplicated', () => {
+    // Simulates a duplicate row for the same PID coming back from the underlying
+    // process listing (e.g. a transient WMI/ps double-read) - the two resulting
+    // "primary" entries produce two chains of equal length and identical PIDs, which
+    // the earlier prefix-only comparison did not catch (neither is a strict prefix of
+    // the other since they're the same length).
+    const dup = { ProcessId: 34, ParentProcessId: 12, Name: 'codex.exe', CommandLine: 'codex.exe exec "a"' };
+    const byPid = new Map([[String(dup.ProcessId), dup]]);
+    const chains = buildChains([dup, { ...dup }], byPid);
+    assert.equal(chains.length, 1);
+  });
 });
 
-describe('process-list (ps output parsing)', () => {
-  test('parses a well-formed ps -eo pid=,ppid=,comm=,args= line', () => {
-    const rows = parsePsOutput('  1234    1   codex   codex exec "prompt with spaces"\n');
-    assert.deepEqual(rows, [
-      { ProcessId: 1234, ParentProcessId: 1, Name: 'codex', CommandLine: 'codex exec "prompt with spaces"' }
-    ]);
+describe('process-list (cross-platform ps parsing)', () => {
+  test('basename extracts the executable name from a full path (macOS/BSD comm)', () => {
+    assert.equal(basename('/opt/homebrew/bin/node'), 'node');
+    assert.equal(basename('/Applications/Visual Studio Code.app/Contents/MacOS/Electron'), 'Electron');
   });
 
-  test('falls back CommandLine to the process name when args is empty', () => {
-    const rows = parsePsOutput('42   1   sh\n');
+  test('basename is a no-op for an already-bare name (Linux/procps comm)', () => {
+    assert.equal(basename('node'), 'node');
+  });
+
+  test('parseCommLines merges pid/ppid/name from a "pid ppid comm" listing', () => {
+    const byPid = parseCommLines('  1234    1   codex\n   42     1   sh\n');
+    assert.deepEqual(byPid.get(1234), { ProcessId: 1234, ParentProcessId: 1, Name: 'codex' });
+    assert.deepEqual(byPid.get(42), { ProcessId: 42, ParentProcessId: 1, Name: 'sh' });
+  });
+
+  test('[regression] parseCommLines extracts a basename even when the full path contains spaces', () => {
+    // BSD/macOS ps reports comm as a full path, and real paths there routinely contain
+    // spaces (app bundle names). A naive "split on whitespace" parse would otherwise
+    // treat the space inside the path as the boundary between the name and args.
+    const byPid = parseCommLines('  501   1   /Applications/Visual Studio Code.app/Contents/MacOS/Electron\n');
+    assert.equal(byPid.get(501).Name, 'Electron');
+  });
+
+  test('parseArgsLines captures the entire remainder as CommandLine, spaces included', () => {
+    const byPid = parseArgsLines('1234 codex exec "prompt with spaces"\n');
+    assert.equal(byPid.get(1234), 'codex exec "prompt with spaces"');
+  });
+
+  test('mergeUnixRows falls back CommandLine to Name when a pid has no args entry', () => {
+    const commByPid = parseCommLines('42   1   sh\n');
+    const rows = mergeUnixRows(commByPid, new Map());
     assert.equal(rows[0].CommandLine, 'sh');
   });
 
   test('skips unparseable or blank lines rather than throwing', () => {
-    const rows = parsePsOutput('\n   \nnot a valid line\n99  1  node  node app.js\n');
-    assert.equal(rows.length, 1);
-    assert.equal(rows[0].ProcessId, 99);
+    const byPid = parseCommLines('\n   \nnot a valid line\n99  1  node\n');
+    assert.equal(byPid.size, 1);
+    assert.ok(byPid.has(99));
+  });
+
+  test('end-to-end merge produces the canonical {ProcessId, ParentProcessId, Name, CommandLine} shape', () => {
+    const commByPid = parseCommLines('1234 1 codex\n');
+    const argsByPid = parseArgsLines('1234 codex exec "a"\n');
+    assert.deepEqual(mergeUnixRows(commByPid, argsByPid), [
+      { ProcessId: 1234, ParentProcessId: 1, Name: 'codex', CommandLine: 'codex exec "a"' }
+    ]);
   });
 });

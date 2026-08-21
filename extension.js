@@ -20,7 +20,7 @@ function activate(context) {
     lastResult: { activeTools: [], idleTools: [], checkedAt: null, error: null },
     pollInFlight: false,
     pollTimer: null,
-    currentChild: null,
+    currentChildren: new Set(),
     disposed: false
   };
 
@@ -37,7 +37,16 @@ function activate(context) {
         schedulePoll(item, state, output, 0);
       }
     }),
-    vscode.window.onDidChangeWindowState(() => schedulePoll(item, state, output, 0)),
+    // Only poll immediately on focus GAIN. Polling immediately on focus LOSS too (i.e.
+    // unconditionally on every state change) would spawn a real OS process on every
+    // window blur - the opposite of what UNFOCUSED_POLL_MULTIPLIER exists to avoid.
+    // The already-scheduled timer still fires on its own for the unfocused case; it'll
+    // naturally pick up the slower interval on its own next reschedule.
+    vscode.window.onDidChangeWindowState((windowState) => {
+      if (windowState.focused) {
+        schedulePoll(item, state, output, 0);
+      }
+    }),
     { dispose: () => disposeState(state) }
   );
 
@@ -93,9 +102,9 @@ async function poll(item, state, output) {
 
   try {
     const processes = await listProcesses(state.tools, (child) => {
-      state.currentChild = child;
+      state.currentChildren.add(child);
+      child.once('exit', () => state.currentChildren.delete(child));
     });
-    state.currentChild = null;
 
     if (state.disposed) {
       return;
@@ -119,8 +128,6 @@ async function poll(item, state, output) {
     state.lastResult = { activeTools, idleTools, checkedAt, error: null };
     output.appendLine(`[${checkedAt.toISOString()}] poll ok in ${Date.now() - startedAt}ms — ${processes.length} candidate processes, ${activeTools.length} tool(s) active`);
   } catch (error) {
-    state.currentChild = null;
-
     if (state.disposed) {
       return;
     }
@@ -293,15 +300,15 @@ function disposeState(state) {
     state.pollTimer = null;
   }
 
-  if (state.currentChild) {
+  for (const child of state.currentChildren) {
     try {
-      state.currentChild.kill();
+      child.kill();
     } catch {
       // Already exited - nothing to do.
     }
-
-    state.currentChild = null;
   }
+
+  state.currentChildren.clear();
 }
 
 function deactivate() {}
