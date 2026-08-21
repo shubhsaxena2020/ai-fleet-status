@@ -1,0 +1,156 @@
+{
+  "name": "ai-fleet-status",
+  "displayName": "AI Fleet Status",
+  "description": "Status bar monitor for background AI CLI agent processes (Codex, Claude Code, Gemini CLI, and more) — user-configurable, cross-platform, zero dependencies.",
+  "version": "0.2.0",
+  "publisher": "local",
+  "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shubhsaxena2020/ai-fleet-status.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0",
+    "node": ">=18"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "cli",
+    "process-monitor",
+    "status-bar",
+    "codex",
+    "claude",
+    "gemini",
+    "hermes"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "aiFleetStatus.showDetails",
+        "title": "AI Fleet Status: Show Details"
+      },
+      {
+        "command": "aiFleetStatus.refresh",
+        "title": "AI Fleet Status: Refresh Now"
+      }
+    ],
+    "configuration": {
+      "title": "AI Fleet Status",
+      "properties": {
+        "aiFleetStatus.tools": {
+          "type": "array",
+          "scope": "machine",
+          "markdownDescription": "AI CLI tools to detect. Each entry matches either a direct process name (native binary) or a `node`/`node.exe` process whose command line contains one of `nodeIdentityFragments` (npm-shim installs). Replaces the built-in default list entirely when set — copy the defaults from the README if you just want to add one tool.",
+          "default": [
+            {
+              "name": "Codex",
+              "processNames": ["codex.exe", "codex"],
+              "actionKeywords": ["exec"],
+              "nodeIdentityFragments": ["codex", "codex.cmd", "codex.exe", "codex.js"]
+            },
+            {
+              "name": "OpenCode",
+              "processNames": ["opencode.exe", "opencode"],
+              "actionKeywords": ["run"],
+              "nodeIdentityFragments": ["opencode", "opencode.cmd", "opencode.exe", "opencode.js", "opencode.mjs", "opencode-ai"]
+            },
+            {
+              "name": "Hermes",
+              "processNames": ["hermes.exe", "hermes"],
+              "actionKeywords": ["-z"],
+              "nodeIdentityFragments": ["hermes", "hermes.cmd", "hermes.exe", "hermes.js", "hermes-agent"]
+            },
+            {
+              "name": "Antigravity",
+              "processNames": ["agy.exe", "agy"],
+              "actionKeywords": ["-p", "--print(?:=[^\\s\"']*)?"],
+              "nodeIdentityFragments": ["agy", "agy.cmd", "agy.exe", "agy.js"]
+            },
+            {
+              "name": "Claude Code",
+              "processNames": ["claude.exe", "claude"],
+              "actionKeywords": ["-p", "--print"],
+              "nodeIdentityFragments": ["claude", "claude.cmd", "claude.exe", "@anthropic-ai/claude-code"]
+            },
+            {
+              "name": "Gemini CLI",
+              "processNames": ["gemini.exe", "gemini"],
+              "actionKeywords": ["-p", "--prompt"],
+              "nodeIdentityFragments": ["gemini", "gemini.cmd", "@google/gemini-cli", "bundle/gemini.js"]
+            },
+            {
+              "name": "Qwen Code",
+              "processNames": ["qwen.exe", "qwen"],
+              "actionKeywords": ["-p"],
+              "nodeIdentityFragments": ["qwen", "qwen.cmd", "@qwen-code/qwen-code", "cli-entry.js"]
+            },
+            {
+              "name": "Goose",
+              "processNames": ["goose.exe", "goose"],
+              "actionKeywords": ["run", "--resume", "--session-id"],
+              "nodeIdentityFragments": ["goose"]
+            },
+            {
+              "name": "Kiro CLI",
+              "processNames": ["kiro-cli.exe", "kiro-cli"],
+              "actionKeywords": ["chat"],
+              "nodeIdentityFragments": ["kiro-cli"]
+            }
+          ],
+          "items": {
+            "type": "object",
+            "required": ["name", "processNames", "actionKeywords"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Display name shown in the status bar and tooltip."
+              },
+              "processNames": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string", "minLength": 1 },
+                "description": "OS-reported process names that identify this tool's native binary, e.g. [\"claude.exe\", \"claude\"]."
+              },
+              "actionKeywords": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string", "minLength": 1 },
+                "description": "Flags/subcommands that must appear as their own token in the command line, e.g. [\"-p\", \"--print\"]. Matched as regex source, so escape regex-special characters if a keyword needs to be literal."
+              },
+              "nodeIdentityFragments": {
+                "type": "array",
+                "default": [],
+                "items": { "type": "string", "minLength": 1 },
+                "description": "Path fragments identifying this tool when it runs via a node/node.exe npm shim instead of its own native binary."
+              }
+            }
+          }
+        },
+        "aiFleetStatus.pollInterval": {
+          "type": "integer",
+          "default": 5000,
+          "minimum": 1000,
+          "description": "How often to poll for running processes, in milliseconds, while the window is focused. Unfocused windows poll 3x less often."
+        },
+        "aiFleetStatus.hideWhenIdle": {
+          "type": "boolean",
+          "default": false,
+          "description": "Hide the status bar item entirely when no configured tool is currently running."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
