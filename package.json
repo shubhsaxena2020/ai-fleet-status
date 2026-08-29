@@ -2,7 +2,7 @@
   "name": "ai-fleet-status",
   "displayName": "AI Fleet Status",
   "description": "Status bar monitor for background AI CLI agent processes (Codex, Claude Code, Gemini CLI, and more) — user-configurable, cross-platform, zero dependencies.",
-  "version": "0.3.0",
+  "version": "0.3.2",
   "publisher": "local",
   "license": "MIT",
   "private": true,
