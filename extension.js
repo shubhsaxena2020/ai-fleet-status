@@ -78,13 +78,23 @@ class FleetTreeDataProvider {
     const tool = this._findToolByLabel(element.label);
     if (tool && tool.sessions.length > 0) {
       return tool.sessions.map((s) => {
-        const label = `${s.mode}${s.isNew ? ' (new)' : ''}`;
-        const node = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Collapsed);
+        const node = new vscode.TreeItem(
+          // Label MUST be distinguishable per session, not just the mode. Two
+          // sessions with the same mode (e.g. two interactive claude sessions)
+          // would otherwise render with identical labels (AFS-02: "labeled only
+          // by mode ... indistinguishable"). Append the stable root PID.
+          `${s.mode}${s.isNew ? ' (new)' : ''} · PID ${s.rootPid}`,
+          vscode.TreeItemCollapsibleState.Collapsed
+        );
         const age = s.startAgeMs != null ? `${Math.max(0, Math.round(s.startAgeMs / 1000))}s` : '';
         node.description = `root PID ${s.rootPid} · ${s.processCount} proc · ${age}`;
         node.iconPath = new vscode.ThemeIcon('chevron-right');
         node.contextValue = 'aiFleetSession';
         node.tooltip = `${s.displayName} · ${s.mode} · confidence ${s.confidence}`;
+        // Carry the UNIQUE, STABLE session id on the node so member resolution is
+        // unambiguous (AFS-02). Two sessions sharing a mode label must NOT resolve
+        // to the first match via a prefix check on the mode string.
+        node.sessionId = s.id;
         node.command = {
           command: 'aiFleetStatus.openSession',
           title: 'Open session',
@@ -95,7 +105,10 @@ class FleetTreeDataProvider {
     }
 
     // Under a session node: show its member processes (SANITIZED labels only).
-    const session = this._findSessionByLabelPrefix(element.label);
+    // Resolve by the carried stable session id, NOT by a label/mode prefix — the
+    // old `_findSessionByLabelPrefix` returned the FIRST session whose mode was a
+    // prefix of the label, so two same-mode sessions collided.
+    const session = this._findSessionById(element);
     if (session) {
       return session.members.map((m) => {
         const node = new vscode.TreeItem(`${m.name || 'process'}`);
@@ -119,10 +132,13 @@ class FleetTreeDataProvider {
     return null;
   }
 
-  _findSessionByLabelPrefix(label) {
-    for (const s of this.fleet.sessions) {
-      if (label && String(label).startsWith(s.mode)) {
-        return s;
+  _findSessionById(element) {
+    const id = element && element.sessionId;
+    if (id != null) {
+      for (const s of this.fleet.sessions) {
+        if (s.id === id) {
+          return s;
+        }
       }
     }
     return null;
