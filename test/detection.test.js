@@ -891,3 +891,43 @@ test('AFS-01 impact: every scalar array-field degrades gracefully (no poll death
   assert.ok(tools && tools.length === 1, 'compileTools returns the malformed-but-coerced tool');
   assert.equal(warns.length, 6, `all six malformed fields must be warned (got ${warns.length})`);
 });
+
+// Adversarial-pass regression: detect() must NOT throw on a null/undefined process
+// row. A malformed enumeration entry (or a sparse array) previously threw
+// `Cannot read properties of null (reading 'name')`, which would abort the ENTIRE
+// detection poll — the AFS-01 impact class (one bad row kills detection for ALL
+// tools). It now degrades to "no match".
+test('adversarial: detect() tolerates null/undefined process rows (no poll death)', () => {
+  const tools = compileTools([{ name: 'Claude', processNames: ['node', 'node.exe'], interpreterHosted: [{ interpreter: ['node', 'node.exe'], fragments: ['claude'] }] }]);
+  for (const bad of [null, undefined, '', 42, {}]) {
+    assert.doesNotThrow(() => detect(bad, tools), `detect(${JSON.stringify(bad)}) must not throw`);
+    assert.equal(detect(bad, tools), null, `detect(${JSON.stringify(bad)}) should be no-match`);
+  }
+  // A real row still matches.
+  assert.ok(detect({ Name: 'node.exe', CommandLine: 'node.exe claude chat' }, tools), 'valid row still matches');
+});
+
+// Adversarial-pass regression: buildFleet() must NOT throw on malformed inputs.
+// - a null/undefined process row in the list previously threw
+//   `Cannot read properties of null (reading 'ProcessId')`;
+// - a null/undefined `detectors` arg previously threw `detectors is not iterable`.
+// Both now degrade gracefully (skip the row / fall back to built-in detectors).
+test('adversarial: buildFleet() tolerates null rows and null detectors', () => {
+  const tools = compileTools([{ name: 'Claude', processNames: ['node', 'node.exe'], interpreterHosted: [{ interpreter: ['node', 'node.exe'], fragments: ['claude'] }] }]);
+  const rows = [
+    null,
+    undefined,
+    { ProcessId: 1001, ParentProcessId: 1, Name: 'node', CommandLine: 'node /a/claude.js' },
+    {}
+  ];
+  let fleet;
+  assert.doesNotThrow(() => { fleet = buildFleet(rows, tools); }, 'buildFleet with null rows must not throw');
+  assert.ok(fleet && Array.isArray(fleet.sessions), 'fleet still produced with a valid session');
+  assert.ok(fleet.sessions.length >= 1, 'the valid claude row still yields a session');
+
+  // Null detectors must not throw; produces a well-formed (possibly empty) fleet
+  // rather than `detectors is not iterable`.
+  let fleet2;
+  assert.doesNotThrow(() => { fleet2 = buildFleet(rows, null); }, 'buildFleet with null detectors must not throw');
+  assert.ok(fleet2 && Array.isArray(fleet2.sessions), 'null detectors yields a well-formed fleet');
+});
