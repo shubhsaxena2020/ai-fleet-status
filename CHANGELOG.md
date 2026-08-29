@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.7 (macOS start-time closure + identity-tier & diagnostics coverage)
+
+- **AFS-04 macOS closure**: added `lib/macos-starttime.js` with `getMacOsProcessStartTime(pid)` — prefers a native `proc_pidinfo` wrapper (optional zero-dep binding) and falls back to locale-pinned `ps -o lstart=` (`LC_ALL=C`/`LANG=C`) to avoid locale-fragile parsing. Wired into the same `startMs` session-id tier via `enumerate.getProcessStartTimeMs` (Linux → `/proc`, macOS → `getMacOsProcessStartTime`, else null). macOS now derives a **real process start epoch**, so a reused PID with identical parent+argv but a different start time yields a distinct session id — closing the macOS branch of AFS-04.
+- **Identity-tier coverage**: `test/session-identity-tiers.test.js` covers `contentHash` determinism and the full `sessionId` precedence (creationTime → startMs → fingerprint → pollSeq → fail-closed `?`), revert-verified.
+- **Diagnostics coverage**: `test/diagnostics.test.js` asserts `buildDiagnostics`/`diagnosticsAsText` never leak raw command lines, prompts, or secrets (member labels via `safeProcessLabel`, whole object via `sanitizeDiagnostics`), revert-verified.
+- **Docs**: README/CHANGELOG updated to reflect the macOS closure; WSL #8 kept as human-gated NO-GO.
+- **Lint script**: added `scripts/lint.js` (zero-dependency CI-less linter: `node --check` over all `lib`/`test`/`scripts` JS + a couple of nits) and wired it as `npm run lint`.
+- **Tagged release**: `v0.3.6-macos-starttime`.
+- Full suite: **173 tests pass, 0 fail** (was 163 in 0.3.6; +10 macOS + 8 identity/diagnostics).
+
 ## 0.3.6 (backlog A–E cleanup & hardening)
 
 - **Docs**: added `BACKLOG.md` (22 sequenced tasks across Phases A–E) and reconciled version/README/CHANGELOG to v0.3.5 (144 tests green).
