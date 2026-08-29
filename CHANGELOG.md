@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.3.3 (second audit remediation: AFS-01 + AFS-04 hardening + detection-engine robustness)
+
+Second independent audit pass. All five AFS findings were reproduced against the
+current `origin/main` with a real run; each is now closed or hardened with a
+regression test that FAILS on the old code and PASSES on the fix. Full suite:
+**133 tests pass, 0 fail** (was 116 before the first audit pass; the second pass
+added 17 regression tests across `detection`, `extension-afs02`, `audit-afs03-05`.
+
+- **Fixed (AFS-01, MEDIUM)**: `detectOne()` assumed `interpreterHosted` entries were
+  host objects with `.interpreters.has(...)`. A malformed custom `aiFleetStatus.tools`
+  entry (`interpreterHosted: ['oops']`, `{}`, or a scalar) threw, and because
+  `compileTools` had no error isolation, ONE bad entry aborted detection for ALL tools
+  (the whole poll died). `detectOne()` now coerces the host/set fields to Sets
+  defensively, and `compileTools` wraps each spec in try/catch so a malformed entry is
+  skipped with a one-time warning. Regression: `test/detection.test.js`
+  (`interpreterHosted: ['oops']` → `detect()` returns `null` instead of throwing;
+  scalar subcommand/flag fields skip + log; whole poll survives one bad entry).
+- **Fixed (AFS-04, LOW) — hardening**: the prior fingerprint fallback
+  (`fp:<ppid>:<cmdlineHash>`) already split PID-reuse when a live process exists.
+  Added a **monotonic `pollSeq` tiebreaker** for the residual `?` case (no creation
+  timestamp AND no process data): distinct polls now yield DISTINCT ids
+  (`local:claude:123:?#1` vs `?#2`), so a reused PID no longer collapses two
+  invocations into one lifecycle cache entry — the audit's exact "PID reused before a
+  creation timestamp exists" scenario. The normal Unix `fp:` path is unchanged, so a
+  still-running session keeps the SAME id across polls (continuity preserved). Trade-off
+  documented in `AUDIT_REPORT.md` (AFS-04): with no process data at all, a still-running
+  session is treated as new each poll — strictly preferable to merging two different
+  invocations. Residual (cannot be fully closed without an OS creation timestamp on Unix):
+  a PID reused with the same parent + identical command line + no process data still
+  collapses. Regression: `test/audit-afs03-05.test.js` (AFS-04 group, 3 tests — pollSeq
+  `?#1`/`?#2` distinct; same fingerprint keeps continuity; legacy no-pollSeq call stays `?`).
+- **Hardened (adversarial pass)**: `detect(null/undefined)` and `buildFleet([null],
+  tools)` / `buildFleet(rows, null)` no longer throw and kill the whole poll — they
+  degrade gracefully (skip bad rows / fall back to an empty fleet). `SessionLifecycle.
+  reconcile(null/undefined/{})` likewise no longer throws. These are the AFS-01 impact
+  class: one malformed input must not abort fleet observation. Regression:
+  `test/detection.test.js` (detect/buildFleet null-input tests) and
+  `test/audit-afs03-05.test.js` (reconcile null-fleet tolerance test).
+- **Docs**: `AUDIT_REPORT.md` now carries an AFS-01 row and an upgraded AFS-04 row;
+  this CHANGELOG entry documents the second pass end-to-end with cited test evidence.
+
 ## 0.3.2 (cross-platform age + detection hardening)
 
 - **Added**: Unix/Linux session start-time estimation. `ps` gives no wall-clock
