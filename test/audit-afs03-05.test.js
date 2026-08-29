@@ -77,6 +77,26 @@ describe('AFS-04: session identity must not collapse two Unix invocations sharin
     assert.equal(sessionId('local', 'claude', 123, null), 'local:claude:123:?', 'no fingerprint => legacy "?" (fail-closed, documented)');
   });
 
+  test('AFS-04 mitigation: a reused PID with no timestamp/fingerprint gets distinct ids per poll', () => {
+    // The audit's exact residual: PID 123 reused "before a creation timestamp exists"
+    // shares one id and one lifecycle cache entry, hiding a restart. With the
+    // monotonic pollSeq tiebreaker, distinct polls yield DISTINCT ids.
+    const reusedPoll1 = sessionId('local', 'claude', 123, null /* no creationTime */, null /* no fingerprint */, 1);
+    const reusedPoll2 = sessionId('local', 'claude', 123, null, null, 2);
+    assert.notEqual(reusedPoll1, reusedPoll2, 'reused PID across two polls must NOT collapse to one id');
+    assert.ok(reusedPoll1.endsWith('?#1'), 'poll 1 embeds the poll-sequence tiebreaker');
+    assert.ok(reusedPoll2.endsWith('?#2'), 'poll 2 embeds the poll-sequence tiebreaker');
+
+    // Regression guard: the legacy no-pollSeq call still fails closed to "?".
+    assert.equal(sessionId('local', 'claude', 123, null), 'local:claude:123:?', 'direct call without pollSeq stays legacy "?"');
+
+    // Continuity preserved: a SAME-fingerprint invocation across polls keeps ONE id
+    // (the normal Unix case is unaffected by the pollSeq tiebreaker).
+    const same1 = sessionId('local', 'claude', 123, null, 'p42:ab12', 1);
+    const same2 = sessionId('local', 'claude', 123, null, 'p42:ab12', 2);
+    assert.equal(same1, same2, 'same fingerprint across polls keeps continuity (fp: path)');
+  });
+
   test('buildFleet keeps two distinct Unix invocations of the same PID as separate sessions', () => {
     // Unix macOS/Linux: no CreationDate => creationTime null. Model PID reuse across
     // two separate polls: PID 123 dies and is later reused by a *different* invocation
