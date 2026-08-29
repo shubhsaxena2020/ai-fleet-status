@@ -131,13 +131,13 @@ describe('AFS-04: session identity must not collapse two Unix invocations sharin
     // PID is a NEW process with a NEW start time. We mock estimateUnixStartTimeMs so
     // the test is deterministic and independent of the host's real pids.
     const enumerate = require('../lib/enumerate');
-    const real = enumerate.estimateUnixStartTimeMs;
+    const real = enumerate.getProcessStartTimeMs;
     function pollWithStartMs(pid, ppid, argv, startMs) {
-      enumerate.estimateUnixStartTimeMs = () => startMs;
+      enumerate.getProcessStartTimeMs = () => startMs;
       try {
         return buildFleet([new Process(pid, ppid, 'claude', argv, null, 'local')], [claudeDetector()]);
       } finally {
-        enumerate.estimateUnixStartTimeMs = real;
+        enumerate.getProcessStartTimeMs = real;
       }
     }
 
