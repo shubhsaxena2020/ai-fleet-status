@@ -1,6 +1,6 @@
 # AI Fleet Status
 
-> **Current version: v0.3.5** — branch `main`, **144 tests green** (8 suites, 0 fail). Scope: the extension-host machine only. Open items: issue #8 (WSL per-distro enumeration — human **NO-GO** decision) and a documented macOS start-time limitation (see CHANGELOG "Known limitations").
+> **Current version: v0.3.6-macos-starttime** — branch `main`, **173 tests green** (20 suites, 0 fail). Scope: the extension-host machine only. Open item: issue #8 (WSL per-distro enumeration — human **NO-GO** decision). The macOS process start-time gap (AFS-04) is now closed — see below.
 
 A VS Code status bar item **and Fleet Explorer Tree View** that show which AI
 coding CLI agents (Codex, Claude Code, Gemini CLI, Hermes, Qwen Code, and more)
@@ -22,15 +22,20 @@ reveal the owning terminal, copy a root PID, or copy sanitized diagnostics.
 
 ## Status
 
-- **Version**: v0.3.5 (branch `main`), **144 tests green** across 8 `node:test` suites, 0 fail.
+- **Version**: v0.3.6-macos-starttime (branch `main`), **173 tests green** across 20 `node:test` suites, 0 fail.
 - **Scope**: observes the **extension-host machine** only. External sessions
   (Windows Terminal, WSL, tmux, SSH) are reported honestly as OS processes.
 - **Open items** (by design, not regressions):
   - Issue **#8** — WSL per-distro enumeration. **NO-GO**: a human decision is
     required (it would start WSL distros and risks destabilizing the core).
-  - macOS has no `/proc`, so a PID reused with the same parent + argv can still
-    collapse into one session id (Linux was closed via `/proc` starttime in v0.3.4,
-    issue #17). Documented limitation, not a silent bug.
+  - The fully-degenerate case (PID reused with identical everything AND no live
+    process data at all) is mitigated by the monotonic `pollSeq` tiebreaker and
+    documented in `AUDIT_REPORT.md` "Remaining limitations".
+- **Session identity**: PID reuse is disambiguated by a real start epoch on every
+  platform — Windows `Win32_Process.CreationDate`, Linux `/proc/<pid>/stat`
+  starttime, and **macOS via `getMacOsProcessStartTime` (proc_pidinfo wrapper,
+  locale-pinned `ps -o lstart=` fallback)**. Fallbacks in order: creation time →
+  start epoch → content fingerprint → poll sequence → fail-closed `?`.
 - **Backlog**: see `BACKLOG.md` (Phases A–E). No speculative features are tracked.
 
 ## Why
@@ -103,8 +108,9 @@ real local install.
   `args` only for candidate PIDs and required ancestors (privacy/perf: avoids
   reading every command line on the machine). On Linux, a session's start time
   (and therefore its displayed age) is estimated from `/proc/<pid>/stat`
-  `starttime` + `/proc/uptime` (read-only; macOS has no `/proc`, so age is shown
-  as unavailable there, same as before).
+  `starttime` + `/proc/uptime` (read-only). On macOS the start time is derived
+  from `proc_pidinfo` (with a locale-pinned `ps -o lstart=` fallback), so a real
+  age is shown there too — closing the AFS-04 macOS gap.
 - Both paths normalize to the same
   `{ProcessId, ParentProcessId, Name, CommandLine, CreationDate}` shape before
   detection logic runs, so detection is platform-agnostic.
