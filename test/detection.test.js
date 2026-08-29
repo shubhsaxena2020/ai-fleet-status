@@ -832,3 +832,62 @@ test('AFS-01: detect() matches a scalar `interpreter` host', () => {
   assert.ok(result, 'scalar `interpreter` host must still match');
   assert.equal(result.id, 'Y');
 });
+
+// AFS-01 (impact): one malformed custom tool entry must NOT abort detection for
+// ALL tools. The audit's impact statement is that a bad entry "aborts detection
+// for ALL tools ... the whole extension goes stale." The prior AFS-01 hardening
+// only guarded `interpreterHosted`; the six subcommand/flag fields were still
+// assumed to be arrays, so a scalar (e.g. `serviceSubcommands: 'serve'`) threw
+// `(spec.x || []).map is not a function` inside compileTools and killed the poll.
+// Verify: a scalar-field typo degrades gracefully — compileTools does NOT throw,
+// the good neighbor survives, and a warning is emitted for the bad field.
+test('AFS-01 impact: scalar subcommand/flag field does not abort the whole poll', () => {
+  const specs = [
+    { name: 'Good', processNames: ['good.exe'] },
+    { name: 'Bad', processNames: ['bad.exe'], serviceSubcommands: 'serve' } // scalar, not array
+  ];
+  const warns = [];
+  const origWarn = console.warn;
+  console.warn = (...a) => warns.push(a.join(' '));
+  let tools;
+  try {
+    assert.doesNotThrow(() => { tools = compileTools(specs); });
+  } finally {
+    console.warn = origWarn;
+  }
+  assert.ok(tools, 'compileTools should still return detectors');
+  const ids = new Set(tools.map((t) => t.id));
+  assert.ok(ids.has('Good'), 'the valid tool must survive a malformed neighbor');
+  // The malformed scalar field is ignored (not thrown); the tool still compiles.
+  assert.ok(ids.has('Bad'), 'the malformed tool still compiles (bad field ignored)');
+  assert.ok(warns.some((w) => w.includes('serviceSubcommands') && w.includes('must be an array')),
+    'a warning must name the malformed field');
+  // The poll still detects the good process.
+  const good = detect({ Name: 'good.exe', CommandLine: 'good.exe' }, tools);
+  assert.ok(good && good.id === 'Good', 'good process still detected after a malformed neighbor');
+});
+
+// Same impact, but exercised across ALL six array fields at once — none may throw.
+test('AFS-01 impact: every scalar array-field degrades gracefully (no poll death)', () => {
+  const specs = [{
+    name: 'Bad',
+    processNames: ['bad.exe'],
+    serviceSubcommands: 'serve',
+    utilSubcommands: 'help',
+    delegatedSubcommands: 'run',
+    delegatedFlags: '-p',
+    resumeFlags: '--resume',
+    interactivePromptFlags: '-i'
+  }];
+  const warns = [];
+  const origWarn = console.warn;
+  console.warn = (...a) => warns.push(a.join(' '));
+  let tools;
+  try {
+    assert.doesNotThrow(() => { tools = compileTools(specs); });
+  } finally {
+    console.warn = origWarn;
+  }
+  assert.ok(tools && tools.length === 1, 'compileTools returns the malformed-but-coerced tool');
+  assert.equal(warns.length, 6, `all six malformed fields must be warned (got ${warns.length})`);
+});
