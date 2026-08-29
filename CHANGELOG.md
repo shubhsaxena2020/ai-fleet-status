@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.4 (community CLIs + stronger Unix session identity)
+
+- **Added (issue #9)**: four widely-used terminal AI agents are now built-in
+  detectors, so they appear in the fleet observer out of the box:
+  - **Aider** — native `aider` binary and the python-hosted `python -m aider` form
+    (`-m`/`--message` is the one-shot delegated run).
+  - **Amp** (Sourcegraph) — native `amp`; `-p`/`--print` delegated, `-c`/`--continue` resume.
+  - **Crush** — native `crush`; `--prompt`/`--print` delegated, `--continue` resume.
+  - **GitHub Copilot CLI** — native `copilot` (official binary name, native-name gated
+    so it cannot over-match); `-p`/`--prompt` delegated, `--continue` resume.
+  Detection reuses the existing structured schema (native name +, for Aider, a
+  python-hosted fragment) with conservative subcommand sets to avoid false positives.
+  Regression: `test/detection.test.js` (+5 tests).
+- **Fixed (AFS-04 / issue #17)**: on Unix/Linux, the session id now embeds the REAL
+  process start epoch (from `/proc/<pid>/stat` starttime, via `estimateUnixStartTimeMs`)
+  as the `st<ms>` segment when no Windows creation timestamp is available. This is the
+  strongest PID-reuse disambiguator without a wall-clock timestamp: a still-running
+  session keeps the same start time across polls (continuity, no age flap), while a PID
+  reused by a NEW process gets a different start time — so even a reused PID with
+  identical parent + argv yields a DISTINCT id, closing the AFS-04 residual (#17). macOS
+  has no `/proc`, so it falls through to the `fp:`/`?#` tiers (unchanged). Regression:
+  `test/audit-afs03-05.test.js` AFS-04 group (+2 tests, revert-verified).
+
+Full suite: **140 tests pass, 0 fail** (was 135 before these two changes; +7 tests).
+
 ## 0.3.3 (second audit remediation: AFS-01 + AFS-04 hardening + detection-engine robustness)
 
 Second independent audit pass. All five AFS findings were reproduced against the
