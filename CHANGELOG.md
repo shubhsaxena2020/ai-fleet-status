@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.6 (backlog A–E cleanup & hardening)
+
+- **Docs**: added `BACKLOG.md` (22 sequenced tasks across Phases A–E) and reconciled version/README/CHANGELOG to v0.3.5 (144 tests green).
+- **Dead-code retirement**: removed deprecated `lib/tool-config.js`, `lib/process-chains.js`, `lib/process-list.js` and `test/unit.test.js`; ported essential regression coverage to new test files.
+- **Robustness hardening**: added guards against null/undefined/malformed input in `enumerate.js`, `detect.js`, `sessions.js`, `terminal.js`, `format.js`, `lifecycle.js`.
+- **Detection coverage**: verified all 14 built-in detectors recognize bare interactive invocations; added regression for community CLI hosted forms.
+- **Fuzzing & adversarial**: added deterministic fuzz test for `detect()`; hardened against missing fields in process rows and detector objects; ensured sanitizers never throw on adversarial command lines.
+- **Test suite**: 163 tests pass, 0 fail (suites: unit, detection, extension, integration, extension-afs02, audit-afs03-05, format-robustness, enumerate-robustness, detect-bare-interactive, detect-community-shim, detect-fuzz, detect-adversarial-fields, sessions-robustness, terminal-robustness, format-robustness, sanitize-adversarial, lifecycle-robustness).
+
 ## 0.3.5 (test hardening: community-CLI fleet integration + real /proc starttime)
 
 Test-only release — no production-code changes. Strengthens coverage for the two
