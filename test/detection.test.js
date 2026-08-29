@@ -792,3 +792,43 @@ test('parseCommLines tolerates a missing trailing token and skips blank lines', 
   assert.ok(byPid.has(101));
   assert.equal(byPid.size, 2);
 });
+
+// AFS-01 (robustness follow-up): the public `detect` API must still work when a
+// detector is handed to it whose `interpreterHosted` element uses a *scalar*
+// `interpreters` field (e.g. `{ interpreters: 'node', fragments: [...] }` — a raw
+// spec that was not run through `compileDetectorFromConfig`/`buildDetector`).
+// The original code only handled `interpreters` as a Set or a legacy `interpreter`
+// Array, so a scalar `interpreters` fell through to `null` and the process was
+// SILENTLY missed (no throw, wrong detection). This is the same AFS-01 parser-shape
+// class the named crash belonged to; it must match, not vanish.
+test('AFS-01: detect() matches a scalar `interpreters` host (no silent miss)', () => {
+  const det = {
+    id: 'X',
+    displayName: 'X',
+    processNames: new Set(['nope']),
+    interpreterHosted: [{ interpreters: 'node', fragments: ['x-cli'] }]
+  };
+  // Command line starts with the interpreter token `node` (matching the scalar set).
+  const proc = { name: 'node', commandLine: 'node /opt/x-cli/run.js -p hi' };
+  let result;
+  assert.doesNotThrow(() => { result = detect(proc, det); });
+  assert.ok(result, 'scalar `interpreters` host must still match (regression: silent miss)');
+  assert.equal(result.kind, 'session');
+  assert.equal(result.confidence, 'medium');
+  assert.equal(result.id, 'X');
+});
+
+// Same shape but with a legacy `interpreter` scalar (defensive completeness).
+test('AFS-01: detect() matches a scalar `interpreter` host', () => {
+  const det = {
+    id: 'Y',
+    displayName: 'Y',
+    processNames: new Set(['nope']),
+    interpreterHosted: [{ interpreter: 'node', fragments: ['y-cli'] }]
+  };
+  const proc = { name: 'node', commandLine: 'node /usr/y-cli/run.js' };
+  let result;
+  assert.doesNotThrow(() => { result = detect(proc, det); });
+  assert.ok(result, 'scalar `interpreter` host must still match');
+  assert.equal(result.id, 'Y');
+});
