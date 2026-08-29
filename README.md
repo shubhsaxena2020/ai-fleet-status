@@ -1,108 +1,145 @@
 # AI Fleet Status
 
-A VS Code status bar item that shows which AI coding CLI agents (Codex, Claude Code,
-Gemini CLI, Hermes, and others) currently have a live background process running on
-your machine — so you can tell at a glance whether a delegated task is still working,
-finished, or never started.
+A VS Code status bar item **and Fleet Explorer Tree View** that show which AI
+coding CLI agents (Codex, Claude Code, Gemini CLI, Hermes, Qwen Code, and more)
+are currently alive on your machine — how many **independent live sessions** each
+one has, how many **processes** belong to those sessions, and (when possible)
+which **VS Code terminal** owns the session.
 
 ```
-$(sync~spin) AI: Codex, Hermes        <- 1-2 tools active, named
-$(sync~spin) AI: 3 active             <- 3+ tools active, collapsed to a count
-$(circle-slash) AI: idle              <- nothing running
-$(warning) AI: poll error             <- the last poll failed; click for the reason
+$(sync~spin) AI: Claude ×4              <- one tool, 4 sessions
+$(sync~spin) AI: Claude ×4 · Codex ×2  <- two tools, short enough to name
+$(sync~spin) AI: 5 tools · 12 sessions <- large fleet, collapsed to counts
+$(circle-slash) AI: idle               <- nothing running
+$(warning) AI: poll error              <- the last poll failed; click for the reason
 ```
 
-Click the status bar item for an interactive breakdown (active tools with their PID/
-process chain, idle tools, a refresh action, and a shortcut to settings).
+Click the status bar item (or open the **Fleet Explorer** in the Activity Bar)
+for a drill-down: active tools → their sessions → process chains, plus actions to
+reveal the owning terminal, copy a root PID, or copy sanitized diagnostics.
 
 ## Why
 
-If you delegate work to CLI-based AI agents in the background (`codex exec`, `claude -p`,
-etc.), it's easy to lose track of which ones are still running, especially several
-minutes into a long task with no visible output. This polls the OS process list every
-few seconds and tells you.
+If you delegate work to CLI-based AI agents in the background (`codex exec`,
+`claude -p`, etc.), it's easy to lose track of which ones are still running —
+and how many separate sessions you actually have open. This polls the OS process
+list and tells you, at a glance and in detail.
 
 ## Supported out of the box
 
-Codex, OpenCode, Hermes, Antigravity (`agy`), Claude Code, Gemini CLI, Qwen Code, Goose,
-and Kiro CLI — each detected either by its native binary name, or (for npm-shim installs)
-by `node`/`node.exe` running a script whose path contains the tool's identity fragment.
+Codex, OpenCode **and OpenCode 2 (`opencode2`)**, Hermes, Antigravity (`agy`),
+Claude Code, Gemini CLI, Qwen Code, Goose, and Kiro CLI — each detected either
+by its native binary name, or (for npm-shim installs) by a `node`/`node.exe`
+process whose command line contains the tool's identity fragment (e.g.
+`@anthropic-ai/claude-code`, `@qwen-code/qwen-code`, `cli-entry.js`). Hermes is
+matched even when it appears as a `python.exe` subprocess of its launcher.
 
-**Add your own tool with zero code changes** via the `aiFleetStatus.tools` setting — see
-[Configuration](#configuration) below.
+**Server / daemon modes are excluded** (`serve`, `app-server`, `mcp-server`,
+`dashboard`, `acp`, `web`, …) so they never inflate your live-session count.
+**Management subcommands** (`mcp list`, `update`, `configure`, `login`, …) are
+also excluded — only live agent sessions are counted.
+
+**Add your own tool with zero code changes** via the `aiFleetStatus.tools`
+setting — see [Configuration](#configuration) below. Optional community CLIs
+(Aider, Amp, Crush, GitHub Copilot CLI) are documented as copy-paste example
+entries rather than built in, to keep the default lean until verified against a
+real local install.
 
 ## How detection works
 
-- A process counts as a match only through a structural signal: either its own
-  OS-reported name IS one of the tool's configured `processNames`, or it's a
+- A process counts as a match only through a **structural** signal: either its
+  own OS-reported name IS one of the tool's configured `processNames`, or it's a
   `node`/`node.exe` process whose command line contains one of the tool's
   `nodeIdentityFragments` (for npm-installed CLIs that run via a JS entrypoint).
-- The command line must also contain one of the tool's `actionKeywords` as its own
-  whitespace/quote-bounded token — not just anywhere as a substring. `--mode=execute`
-  does not match an `exec` keyword; `codex.exe exec "prompt"` does, regardless of where
-  in the command line the flag appears.
-- Shell wrapper processes (`sh`, `bash`) are never scanned for identity or action on
-  their own — their command line is arbitrary wrapped text (e.g. a delegation prompt)
-  that could coincidentally mention any tool's name. They only appear in a tooltip as
-  part of a process chain when they're a real parent of a process that matched on its
-  own terms.
-- A single logical task that spans multiple processes (e.g. a shell spawning `node`
-  spawning the native binary) is shown as one task with its process chain, not as
-  multiple separate running tasks.
+- A **session** is one independent live invocation. Multiple processes belonging
+  to the same logical invocation (a shell → `node` → native binary chain, helper
+  children) count as **one session with several processes**, never as several
+  sessions.
+- **Services** (e.g. `hermes serve`, `codex app-server`, `mcp-server`,
+  `dashboard`) are detected and reported **separately** from interactive/
+  delegated user sessions, so a daemon never inflates your session count.
+- Shell-wrapper processes (`sh`, `bash`, `powershell`) are never treated as
+  sessions on their own; they only appear in a process chain as evidence of
+  ancestry.
+- Session identity is `scope:toolId:rootPid:creationTime` (Windows `CreationDate`
+  disambiguates recycled PIDs), not PID alone.
+
+## Status bar and Fleet Explorer
+
+- The status bar is the glanceable layer (compact counts only).
+- The **Fleet Explorer** Tree View is the deeper observability layer: each tool
+  expands to its sessions (with mode + age), and each session expands to its
+  process chain. Click a session to reveal its terminal, copy its root PID, or
+  copy sanitized diagnostics.
+- External sessions (running outside VS Code — Windows Terminal, WSL, tmux, SSH)
+  appear as OS-observed processes and are honestly labeled rather than given a
+  fake terminal.
 
 ## Cross-platform
 
-- **Windows**: polls `Win32_Process` via a spawned `powershell.exe`.
-- **macOS / Linux**: polls `ps -eo pid=,ppid=,comm=,args=` with unbounded width so long
-  command lines aren't truncated.
-
-Both paths normalize to the same `{ProcessId, ParentProcessId, Name, CommandLine}` shape
-before anything else in the pipeline runs, so detection logic is platform-agnostic.
+- **Windows**: polls `Win32_Process` via one spawned `powershell.exe`, capturing
+  `CreationDate` for PID-reuse resistance.
+- **macOS / Linux**: two-stage `ps` — `comm` for every process (cheap), then
+  `args` only for candidate PIDs and required ancestors (privacy/perf: avoids
+  reading every command line on the machine).
+- Both paths normalize to the same
+  `{ProcessId, ParentProcessId, Name, CommandLine, CreationDate}` shape before
+  detection logic runs, so detection is platform-agnostic.
 
 ## Configuration
 
 | Setting | Default | Description |
 |---|---|---|
-| `aiFleetStatus.tools` | 9 built-in tools (see `package.json`) | Array of `{ name, processNames, actionKeywords, nodeIdentityFragments }`. Setting this **replaces** the default list — include the defaults you still want alongside your addition. |
-| `aiFleetStatus.pollInterval` | `5000` | Poll interval in ms while the window is focused. Unfocused windows poll 3x less often. |
+| `aiFleetStatus.tools` | 9 built-in tools (see `package.json`) | Array of tool descriptors (see schema below). Setting this **replaces** the default list — include the defaults you still want alongside your addition. |
+| `aiFleetStatus.pollInterval` | `5000` | Poll interval in ms while the window is focused. Unfocused windows poll 3× less often. |
 | `aiFleetStatus.hideWhenIdle` | `false` | Hide the status bar item entirely when nothing configured is running. |
+| `aiFleetStatus.enableTerminalCorrelation` | `true` | Map AI sessions to the integrated terminal that spawned them (needs shell integration). External sessions still shown. |
+| `aiFleetStatus.enableSessionNotifications` | `false` | OPT-IN non-spammy notification when the fleet gains/loses its first/last session. Off by default. |
 
-Example — adding a hypothetical `foo` CLI to the defaults:
+Tool descriptor schema:
 
 ```jsonc
-"aiFleetStatus.tools": [
-  // ...paste the 9 defaults from package.json here...
-  {
-    "name": "Foo",
-    "processNames": ["foo.exe", "foo"],
-    "actionKeywords": ["run"],
-    "nodeIdentityFragments": ["foo-cli"]
-  }
-]
+{
+  "name": "Foo",                       // display name (user-configurable; treated as untrusted text)
+  "processNames": ["foo.exe", "foo"],  // REQUIRED — native binary image names
+  "nodeIdentityFragments": ["foo-cli"],// OPTIONAL — path fragments for npm-shim installs
+  "serviceSubcommands": ["serve"],     // OPTIONAL — server/daemon subcommands (reported as SERVICES, not sessions)
+  "delegatedFlags": ["-p"],            // OPTIONAL — flags marking non-interactive/delegated mode
+  "resumeSubcommands": ["--resume"]    // OPTIONAL — flags marking a resumed session
+}
 ```
 
-`actionKeywords` are matched as regex source (so you can pass an alternation like
-`"--print(?:=.*)?"`), not raw literal text — escape regex-special characters if a
-keyword needs to match literally.
+`actionKeywords` (the older field) is still accepted and migrated to
+`delegatedFlags`; it is a **hint only**, never a gate — a matching process name
+already implies a session. All matchers are **literal tokens**, not regular
+expressions, so a custom tool cannot cause a regex denial-of-service.
+
+## Privacy
+
+- Full command lines are **never** persisted or shown by default.
+- "Copy Diagnostics" strips API keys, bearer tokens, passwords, and prompt text;
+  it reports only sanitized PID/name/role topology, counts, timing, and config.
+- The extension makes **no network calls** and collects **no telemetry**.
 
 ## Design notes
 
 - Zero npm runtime dependencies, no build step. `extension.js` requires only Node
-  built-ins, the `vscode` module VS Code provides, and the plain CommonJS modules in
+  built-ins, the `vscode` module VS Code provides, and plain CommonJS modules in
   `lib/`.
-- The `lib/` modules are pure functions with no dependency on the real `vscode` API or a
-  live OS process list, so they're unit-tested directly (`npm test`, `node:test` — no
-  test framework dependency either).
-- No telemetry.
+- The `lib/` modules are pure functions with no dependency on the real `vscode`
+  API or a live OS process list, so they're unit-tested directly (`npm test`,
+  `node:test` — no test framework dependency either).
+- `extensionKind` is `["ui","workspace"]`: the extension observes whatever machine
+  the extension host runs on (`vscode.env.remoteName`).
 
 ## Development
 
 ```
-npm test              # run the unit test suite
+npm test              # run the unit + integration test suite (node:test)
 ```
 
-Press F5 in VS Code (with this folder open) to launch an Extension Development Host for
-manual testing — `.vscode/launch.json` is already set up for it.
+Press F5 in VS Code (with this folder open) to launch an Extension Development
+Host for manual testing — `.vscode/launch.json` is already set up for it.
 
 ## License
 

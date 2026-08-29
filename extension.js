@@ -1,67 +1,225 @@
 'use strict';
 
 const vscode = require('vscode');
-const { listProcesses } = require('./lib/process-list');
-const { buildTasksByTool, formatProcessChain } = require('./lib/process-chains');
-const { DEFAULT_TOOLS, compileTools } = require('./lib/tool-config');
+const { listProcesses } = require('./lib/enumerate');
+const { compileTools, detect } = require('./lib/detect');
+const { buildFleet } = require('./lib/sessions');
+const { SessionLifecycle } = require('./lib/lifecycle');
+const { TerminalCorrelator } = require('./lib/terminal');
+const { summarizeStatusBar, summarizeFleet } = require('./lib/format');
+const { safeProcessLabel } = require('./lib/sanitize');
+const { buildDiagnostics, diagnosticsAsText } = require('./lib/diagnostics');
 
 const CONFIG_SECTION = 'aiFleetStatus';
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const UNFOCUSED_POLL_MULTIPLIER = 3;
 const MAX_SHORT_LABEL_LENGTH = 24;
+const TREE_VIEW_ID = 'aiFleetStatus.fleetExplorer';
+
+class FleetTreeDataProvider {
+  constructor() {
+    this._onDidChangeTreeData = new vscode.EventEmitter();
+    this.onDidChangeTreeData = this._onDidChangeTreeData.event;
+    this.fleet = null;
+  }
+
+  refresh(fleet) {
+    this.fleet = fleet;
+    this._onDidChangeTreeData.fire();
+  }
+
+  getTreeItem(element) {
+    return element;
+  }
+
+  getChildren(element) {
+    if (!this.fleet) {
+      return [];
+    }
+    if (!element) {
+      // Top level: one node per tool (active first), then idle tools.
+      const nodes = [];
+      const active = [];
+      const idle = [];
+      for (const [id, tool] of this.fleet.tools) {
+        if (tool.sessions.length > 0) {
+          active.push(tool);
+        } else {
+          idle.push(tool);
+        }
+      }
+      active.sort((a, b) => b.sessions.length - a.sessions.length);
+      for (const tool of active) {
+        const procTotal = tool.sessions.reduce((acc, s) => acc + s.processCount, 0);
+        const node = new vscode.TreeItem(
+          `${tool.displayName}`,
+          vscode.TreeItemCollapsibleState.Expanded
+        );
+        node.description = `${tool.sessions.length} session${tool.sessions.length === 1 ? '' : 's'} · ${procTotal} processes`;
+        node.iconPath = new vscode.ThemeIcon('sync~spin');
+        node.contextValue = 'aiFleetTool';
+        node.tooltip = `${tool.displayName}: ${tool.sessions.length} session(s), ${procTotal} process(es)`;
+        nodes.push(node);
+      }
+      for (const tool of idle) {
+        const node = new vscode.TreeItem(
+          `${tool.displayName}`,
+          vscode.TreeItemCollapsibleState.None
+        );
+        node.description = 'idle';
+        node.iconPath = new vscode.ThemeIcon('circle-slash');
+        node.contextValue = 'aiFleetToolIdle';
+        nodes.push(node);
+      }
+      return nodes;
+    }
+
+    // Under a tool node: show its sessions.
+    const tool = this._findToolByLabel(element.label);
+    if (tool && tool.sessions.length > 0) {
+      return tool.sessions.map((s) => {
+        const label = `${s.mode}${s.isNew ? ' (new)' : ''}`;
+        const node = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Collapsed);
+        const age = s.startAgeMs != null ? `${Math.max(0, Math.round(s.startAgeMs / 1000))}s` : '';
+        node.description = `root PID ${s.rootPid} · ${s.processCount} proc · ${age}`;
+        node.iconPath = new vscode.ThemeIcon('chevron-right');
+        node.contextValue = 'aiFleetSession';
+        node.tooltip = `${s.displayName} · ${s.mode} · confidence ${s.confidence}`;
+        node.command = {
+          command: 'aiFleetStatus.openSession',
+          title: 'Open session',
+          arguments: [s.id]
+        };
+        return node;
+      });
+    }
+
+    // Under a session node: show its member processes (SANITIZED labels only).
+    const session = this._findSessionByLabelPrefix(element.label);
+    if (session) {
+      return session.members.map((m) => {
+        const node = new vscode.TreeItem(`${m.name || 'process'}`);
+        node.description = `PID ${m.pid} · ${safeProcessLabel(m.commandLine)}`;
+        node.iconPath = new vscode.ThemeIcon('circle-outline');
+        node.contextValue = 'aiFleetProcess';
+        node.tooltip = `PID ${m.pid} (sanitized command line)`;
+        return node;
+      });
+    }
+
+    return [];
+  }
+
+  _findToolByLabel(label) {
+    for (const tool of this.fleet.tools.values()) {
+      if (tool.displayName === label) {
+        return tool;
+      }
+    }
+    return null;
+  }
+
+  _findSessionByLabelPrefix(label) {
+    for (const s of this.fleet.sessions) {
+      if (label && String(label).startsWith(s.mode)) {
+        return s;
+      }
+    }
+    return null;
+  }
+}
 
 function activate(context) {
   const output = vscode.window.createOutputChannel('AI Fleet Status');
-  const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-  item.command = 'aiFleetStatus.showDetails';
+  const statusItem = vscode.window.createStatusBarItem({ alignment: vscode.StatusBarAlignment.Right, id: 'aiFleetStatus.statusBar', priority: 100 });
+  statusItem.command = 'aiFleetStatus.showDetails';
+
+  const treeProvider = new FleetTreeDataProvider();
+  const treeView = vscode.window.createTreeView(TREE_VIEW_ID, { treeDataProvider: treeProvider });
+
+  const lifecycle = new SessionLifecycle();
+  const correlator = new TerminalCorrelator();
 
   const state = {
     tools: compileConfiguredTools(output),
-    lastResult: { activeTools: [], idleTools: [], checkedAt: null, error: null },
+    lastResult: { fleet: null, checkedAt: null, error: null, lifecycle: null },
     pollInFlight: false,
     pollTimer: null,
     currentChildren: new Set(),
-    disposed: false
+    disposed: false,
+    pollLatencyMs: null,
+    scope: detectScope(),
+    // Real runtime objects the poll/refresh closures need.
+    _statusItem: statusItem,
+    _output: output,
+    _treeProvider: treeProvider,
+    _correlator: correlator,
+    _treeView: treeView
   };
 
-  refreshStatusBar(item, state);
+  refreshStatusBar(statusItem, state);
+  treeProvider.refresh(emptyFleet(state.tools));
+
+  // Initial correlation of currently-open terminals.
+  correlator.refresh(vscode.window.terminals).catch(() => {});
 
   context.subscriptions.push(
-    item,
+    statusItem,
     output,
+    treeView,
     vscode.commands.registerCommand('aiFleetStatus.showDetails', () => showDetails(state)),
-    vscode.commands.registerCommand('aiFleetStatus.refresh', () => schedulePoll(item, state, output, 0)),
+    vscode.commands.registerCommand('aiFleetStatus.refresh', () => schedulePoll(state, 0)),
+    vscode.commands.registerCommand('aiFleetStatus.openFleetExplorer', () => {
+      vscode.commands.executeCommand('workbench.view.extension.aiFleetStatus');
+    }),
+    vscode.commands.registerCommand('aiFleetStatus.copyDiagnostics', () => copyDiagnostics(state, output)),
+    vscode.commands.registerCommand('aiFleetStatus.openSession', (sessionId) => openSession(state, sessionId)),
+    vscode.commands.registerCommand('aiFleetStatus.copyRootPid', (sessionId) => copyRootPid(state, sessionId, output)),
+    vscode.commands.registerCommand('aiFleetStatus.revealTerminal', (name) => revealTerminalByName(name)),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration(CONFIG_SECTION)) {
         state.tools = compileConfiguredTools(output);
-        schedulePoll(item, state, output, 0);
+        schedulePoll(state, 0);
       }
     }),
-    // Only poll immediately on focus GAIN. Polling immediately on focus LOSS too (i.e.
-    // unconditionally on every state change) would spawn a real OS process on every
-    // window blur - the opposite of what UNFOCUSED_POLL_MULTIPLIER exists to avoid.
-    // The already-scheduled timer still fires on its own for the unfocused case; it'll
-    // naturally pick up the slower interval on its own next reschedule.
     vscode.window.onDidChangeWindowState((windowState) => {
       if (windowState.focused) {
-        schedulePoll(item, state, output, 0);
+        schedulePoll(state, 0);
       }
     }),
+    vscode.window.onDidOpenTerminal(() => { correlator.refresh(vscode.window.terminals).catch(() => {}); }),
+    vscode.window.onDidCloseTerminal(() => { correlator.refresh(vscode.window.terminals).catch(() => {}); }),
     { dispose: () => disposeState(state) }
   );
 
-  schedulePoll(item, state, output, 0);
+  schedulePoll(state, 0);
+}
+
+async function revealTerminalByName(name) {
+  for (const t of vscode.window.terminals) {
+    if (t.name === name) {
+      t.show();
+      return;
+    }
+  }
+}
+
+function detectScope() {
+  // vscode.env.remoteName: undefined (local), 'wsl', 'ssh-remote', 'dev-container', etc.
+  const remote = vscode.env && vscode.env.remoteName;
+  if (!remote) {
+    return 'local';
+  }
+  return `remote:${remote}`;
 }
 
 function compileConfiguredTools(output) {
-  const configured = vscode.workspace.getConfiguration(CONFIG_SECTION).get('tools', DEFAULT_TOOLS);
+  const configured = vscode.workspace.getConfiguration(CONFIG_SECTION).get('tools', undefined);
   const compiled = compileTools(configured);
-
   if (compiled.length === 0) {
-    output.appendLine(`[${new Date().toISOString()}] "${CONFIG_SECTION}.tools" produced no usable entries; falling back to built-in defaults.`);
-    return compileTools(DEFAULT_TOOLS);
+    output.appendLine(`[${new Date().toISOString()}] "aiFleetStatus.tools" produced no usable entries; using built-in defaults.`);
+    return compileTools(undefined);
   }
-
   return compiled;
 }
 
@@ -74,16 +232,43 @@ function getHideWhenIdle() {
   return Boolean(vscode.workspace.getConfiguration(CONFIG_SECTION).get('hideWhenIdle', false));
 }
 
-function schedulePoll(item, state, output, delayMs) {
+function getEnableTerminalCorrelation() {
+  return Boolean(vscode.workspace.getConfiguration(CONFIG_SECTION).get('enableTerminalCorrelation', true));
+}
+
+function getEnableSessionNotifications() {
+  return Boolean(vscode.workspace.getConfiguration(CONFIG_SECTION).get('enableSessionNotifications', false));
+}
+
+// Conservative, opt-in notifications: only the FIRST session appearing or the LAST
+// session ending generate a notification, so a noisy multi-agent environment does
+// not spam. We never claim a task "completed" or "succeeded" — only that a session
+// started or ended.
+function emitLifecycleNotifications(state, prevFirstSeen, nowFirstSeen, fleet) {
+  if (!getEnableSessionNotifications()) {
+    return;
+  }
   if (state.disposed) {
     return;
   }
+  if (prevFirstSeen == null && nowFirstSeen != null) {
+    const sample = fleet.sessions[0];
+    if (sample) {
+      vscode.window.showInformationMessage(`${sample.displayName} session started.`);
+    }
+  } else if (prevFirstSeen != null && nowFirstSeen == null) {
+    vscode.window.showInformationMessage('AI Fleet Status: fleet became idle (last AI session ended).');
+  }
+}
 
+function schedulePoll(state, delayMs) {
+  if (state.disposed) {
+    return;
+  }
   if (state.pollTimer) {
     clearTimeout(state.pollTimer);
   }
-
-  state.pollTimer = setTimeout(() => poll(item, state, output), delayMs);
+  state.pollTimer = setTimeout(() => poll(state), delayMs);
 }
 
 function nextDelayMs() {
@@ -92,57 +277,96 @@ function nextDelayMs() {
   return focused ? base : base * UNFOCUSED_POLL_MULTIPLIER;
 }
 
-async function poll(item, state, output) {
+async function poll(state) {
   if (state.disposed || state.pollInFlight) {
     return;
   }
-
   state.pollInFlight = true;
   const startedAt = Date.now();
 
   try {
     const processes = await listProcesses(state.tools, (child) => {
       state.currentChildren.add(child);
-      child.once('exit', () => state.currentChildren.delete(child));
+      // A child that fails to spawn (e.g. ENOENT) emits 'error' but never
+      // 'exit', so it must be removed on either event or it leaks until
+      // dispose. 'close' covers both.
+      const remove = () => state.currentChildren.delete(child);
+      child.once('exit', remove);
+      child.once('error', remove);
     });
 
     if (state.disposed) {
       return;
     }
 
-    const tasksByTool = buildTasksByTool(processes, state.tools);
-    const checkedAt = new Date();
-    const activeTools = [];
-    const idleTools = [];
+    // Re-correlate terminal pids opportunistically (cheap; processIds cached).
+    await correlatorSafeRefresh(state);
 
-    for (const tool of state.tools) {
-      const tasks = tasksByTool.get(tool.name) || [];
-
-      if (tasks.length > 0) {
-        activeTools.push({ name: tool.name, tasks });
-      } else {
-        idleTools.push(tool.name);
-      }
+    const fleet = buildFleet(processes, state.tools);
+    fleet._graph = buildGraph(processes);
+    if (getEnableTerminalCorrelation()) {
+      applyTerminalCorrelation(state, fleet);
     }
+    const prevFirstSeen = state.lifecycle.firstSeen;
+    state.lifecycle.reconcile(fleet);
+    state.pollLatencyMs = Date.now() - startedAt;
 
-    state.lastResult = { activeTools, idleTools, checkedAt, error: null };
-    output.appendLine(`[${checkedAt.toISOString()}] poll ok in ${Date.now() - startedAt}ms — ${processes.length} candidate processes, ${activeTools.length} tool(s) active`);
+    emitLifecycleNotifications(state, prevFirstSeen, state.lifecycle.firstSeen, fleet);
+
+    state.lastResult = { fleet, checkedAt: new Date(), error: null, lifecycle: state.lifecycle };
+    outputSafe(state, `poll ok in ${state.pollLatencyMs}ms — ${processes.length} candidate processes, ${fleet.toolCount} tool(s) active, ${fleet.sessionCount} session(s)`);
   } catch (error) {
     if (state.disposed) {
       return;
     }
-
     const reason = describePollError(error);
-    state.lastResult = { activeTools: [], idleTools: [], checkedAt: state.lastResult.checkedAt, error: reason };
-    output.appendLine(`[${new Date().toISOString()}] poll failed: ${reason}`);
+    state.lastResult = { fleet: state.lastResult.fleet, checkedAt: state.lastResult.checkedAt, error: reason, lifecycle: state.lifecycle };
+    outputSafe(state, `poll failed: ${reason}`);
   } finally {
     state.pollInFlight = false;
   }
 
-  refreshStatusBar(item, state);
+  refreshStatusBar(state._statusItem, state);
+  if (state._treeProvider) {
+    state._treeProvider.refresh(state.lastResult.fleet || emptyFleet(state.tools));
+  }
 
   if (!state.disposed) {
-    schedulePoll(item, state, output, nextDelayMs());
+    schedulePoll(state, nextDelayMs());
+  }
+}
+
+function buildGraph(processes) {
+  // Local import to avoid a cycle at module load; process-model has no deps on us.
+  const { ProcessGraph, Process } = require('./lib/process-model');
+  const procs = processes.map((p) => new Process(p.ProcessId, p.ParentProcessId, p.Name, p.CommandLine, p.CreationDate, p.scope || 'local'));
+  return new ProcessGraph(procs);
+}
+
+// These helpers resolve module-level refs the closure above references; we attach
+// the view/statusItem onto state for clean access instead.
+function statusItemRef(state) {
+  return state._statusItem;
+}
+function outputSafe(state, text) {
+  if (state._output && !state.disposed) {
+    try { state._output.appendLine(`[${new Date().toISOString()}] ${text}`); } catch { /* ignore */ }
+  }
+}
+async function correlatorSafeRefresh(state) {
+  try {
+    await state._correlator.refresh(vscode.window.terminals);
+  } catch { /* ignore */ }
+}
+function applyTerminalCorrelation(state, fleet) {
+  if (!state._correlator) {
+    return;
+  }
+  for (const session of fleet.sessions) {
+    const graph = fleet._graph;
+    if (graph) {
+      session.terminal = state._correlator.correlate(graph, session.rootPid);
+    }
   }
 }
 
@@ -150,18 +374,15 @@ function describePollError(error) {
   if (error && (error.killed || error.signal)) {
     return 'process polling timed out';
   }
-
   const stderrText = typeof error.stderr === 'string' ? error.stderr.trim() : '';
-
   if (stderrText) {
-    return stderrText;
+    return stderrText.slice(0, 500);
   }
-
-  return (error && error.message) || 'Unknown process polling error';
+  return (error && error.message) ? String(error.message).slice(0, 500) : 'Unknown process polling error';
 }
 
 function refreshStatusBar(item, state) {
-  const { activeTools, error } = state.lastResult;
+  const { fleet, error } = state.lastResult;
 
   if (error) {
     item.show();
@@ -173,12 +394,11 @@ function refreshStatusBar(item, state) {
 
   item.backgroundColor = undefined;
 
-  if (activeTools.length === 0) {
+  if (!fleet || fleet.toolCount === 0) {
     if (getHideWhenIdle()) {
       item.hide();
       return;
     }
-
     item.show();
     item.text = '$(circle-slash) AI: idle';
     item.tooltip = buildTooltip(state);
@@ -186,128 +406,243 @@ function refreshStatusBar(item, state) {
   }
 
   item.show();
-  item.text = `$(sync~spin) AI: ${summarizeActiveTools(activeTools)}`;
+  item.text = summarizeStatusBar(fleet);
   item.tooltip = buildTooltip(state);
 }
 
-function summarizeActiveTools(activeTools) {
-  if (activeTools.length <= 2) {
-    const joined = activeTools.map((tool) => tool.name).join(', ');
-
-    if (joined.length <= MAX_SHORT_LABEL_LENGTH) {
-      return joined;
-    }
-  }
-
-  return `${activeTools.length} active`;
-}
-
 function buildTooltip(state) {
-  const { activeTools, idleTools, checkedAt } = state.lastResult;
-  const md = new vscode.MarkdownString('', true);
-  md.isTrusted = true;
+  const { fleet, checkedAt } = state.lastResult;
+  if (!fleet) {
+    return 'AI Fleet Status';
+  }
+  const md = new vscode.MarkdownString();
   md.supportThemeIcons = true;
-
+  // NOTE: isTrusted deliberately left FALSE. Tool names are user-configurable and
+  // must not be able to inject Markdown/command URIs into the status bar tooltip.
   md.appendMarkdown('**AI Fleet Status**\n\n');
 
-  if (activeTools.length === 0) {
-    md.appendMarkdown('_No delegated AI CLI tasks currently running._\n\n');
+  const summary = summarizeFleet(fleet);
+  if (fleet.toolCount === 0) {
+    md.appendMarkdown('_No AI CLI sessions currently running._\n\n');
   } else {
-    for (const tool of activeTools) {
-      const detail = tool.tasks.map(formatProcessChain).join('; ');
-      md.appendMarkdown(`- $(sync~spin) **${tool.name}** — ${detail}\n`);
+    for (const tool of fleet.tools.values()) {
+      if (tool.sessions.length === 0) {
+        continue;
+      }
+      const procTotal = tool.sessions.reduce((acc, s) => acc + s.processCount, 0);
+      md.appendMarkdown(`- $(sync~spin) **${tool.displayName}** — ${tool.sessions.length} session(s) · ${procTotal} processes\n`);
     }
-
     md.appendMarkdown('\n');
   }
 
-  if (idleTools.length > 0) {
-    md.appendMarkdown(`_Idle: ${idleTools.join(', ')}_\n\n`);
+  md.appendMarkdown(`Total: ${summary.totalTools} tools · ${summary.totalSessions} sessions · ${summary.totalProcesses} processes\n`);
+  if (state.scope && state.scope !== 'local') {
+    md.appendMarkdown(`Scope: ${state.scope}\n`);
   }
-
   if (checkedAt) {
     md.appendMarkdown(`---\nLast checked: ${checkedAt.toISOString()}`);
   }
-
   return md;
 }
 
 function buildErrorTooltip(state) {
-  const lines = ['AI Fleet Status poll failed', `Reason: ${state.lastResult.error}`];
-
+  const lines = ['**AI Fleet Status** — poll failed', '', `Reason: ${state.lastResult.error}`];
   if (state.lastResult.checkedAt) {
     lines.push(`Last successful check: ${state.lastResult.checkedAt.toISOString()}`);
   } else {
     lines.push('No successful process check yet');
   }
-
-  return lines.join('\n');
+  const md = new vscode.MarkdownString(lines.join('\n'));
+  return md;
 }
 
 async function showDetails(state) {
-  const { activeTools, idleTools, checkedAt, error } = state.lastResult;
+  const { fleet, checkedAt, error } = state.lastResult;
   const items = [
-    { label: '$(refresh) Refresh now', kind: vscode.QuickPickItemKind.Default, action: 'refresh' },
-    { label: '$(gear) Open settings', kind: vscode.QuickPickItemKind.Default, action: 'settings' }
+    { label: '$(refresh) Refresh now', action: 'refresh' },
+    { label: '$(search) Open Fleet Explorer', action: 'explorer' },
+    { label: '$(gear) Open settings', action: 'settings' },
+    { label: '$(clippy) Copy sanitized diagnostics', action: 'diagnostics' }
   ];
 
   if (error) {
-    items.push(
-      { label: '', kind: vscode.QuickPickItemKind.Separator },
-      { label: `$(warning) Poll error: ${error}`, kind: vscode.QuickPickItemKind.Default }
-    );
+    items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
+    items.push({ label: `$(warning) Poll error: ${error}`, action: 'none' });
   }
 
-  if (activeTools.length > 0) {
+  if (fleet && fleet.toolCount > 0) {
     items.push({ label: 'Active', kind: vscode.QuickPickItemKind.Separator });
-
-    for (const tool of activeTools) {
+    for (const tool of fleet.tools.values()) {
+      if (tool.sessions.length === 0) {
+        continue;
+      }
+      const procTotal = tool.sessions.reduce((acc, s) => acc + s.processCount, 0);
       items.push({
-        label: `$(sync~spin) ${tool.name}`,
-        description: tool.tasks.map(formatProcessChain).join('; ')
+        label: `$(sync~spin) ${tool.displayName}`,
+        description: `${tool.sessions.length} session(s) · ${procTotal} process(es)`,
+        action: 'tool',
+        toolId: tool.id
       });
     }
   }
 
-  if (idleTools.length > 0) {
-    items.push({ label: 'Idle', kind: vscode.QuickPickItemKind.Separator });
-
-    for (const name of idleTools) {
-      items.push({ label: `$(circle-slash) ${name}`, description: 'idle' });
+  if (fleet) {
+    const idle = [];
+    for (const tool of fleet.tools.values()) {
+      if (tool.sessions.length === 0) {
+        idle.push(tool.displayName);
+      }
+    }
+    if (idle.length > 0) {
+      items.push({ label: 'Idle', kind: vscode.QuickPickItemKind.Separator });
+      for (const name of idle) {
+        items.push({ label: `$(circle-slash) ${name}`, description: 'idle', action: 'none' });
+      }
     }
   }
 
   items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
-  items.push({
-    label: checkedAt ? `Last checked: ${checkedAt.toISOString()}` : 'No successful check yet',
-    kind: vscode.QuickPickItemKind.Default
-  });
+  items.push({ label: checkedAt ? `Last checked: ${checkedAt.toISOString()}` : 'No successful check yet', action: 'none' });
 
   const picked = await vscode.window.showQuickPick(items, { placeHolder: 'AI Fleet Status' });
-
-  if (picked && picked.action === 'refresh') {
-    await vscode.commands.executeCommand('aiFleetStatus.refresh');
-  } else if (picked && picked.action === 'settings') {
-    await vscode.commands.executeCommand('workbench.action.openSettings', CONFIG_SECTION);
+  if (!picked) {
+    return;
   }
+  if (picked.action === 'refresh') {
+    schedulePoll(state, 0);
+  } else if (picked.action === 'explorer') {
+    vscode.commands.executeCommand('workbench.view.extension.aiFleetStatus');
+  } else if (picked.action === 'settings') {
+    vscode.commands.executeCommand('workbench.action.openSettings', CONFIG_SECTION);
+  } else if (picked.action === 'diagnostics') {
+    copyDiagnostics(state, state._output);
+  } else if (picked.action === 'tool') {
+    await showToolSessions(state, picked.toolId);
+  }
+}
+
+async function showToolSessions(state, toolId) {
+  const fleet = state.lastResult.fleet;
+  if (!fleet) {
+    return;
+  }
+  const tool = fleet.tools.get(toolId);
+  if (!tool) {
+    return;
+  }
+  const items = tool.sessions.map((s) => ({
+    label: `$(sync~spin) ${s.mode}${s.isNew ? ' (new)' : ''}`,
+    description: `root PID ${s.rootPid} · ${s.processCount} processes`,
+    action: 'session',
+    sessionId: s.id
+  }));
+  if (tool.services.length > 0) {
+    items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
+    for (const sv of tool.services) {
+      items.push({ label: `$(warning) service (PID ${sv.pid})`, description: 'daemon/server mode — not a user session', action: 'none' });
+    }
+  }
+  const picked = await vscode.window.showQuickPick(items, { placeHolder: `${tool.displayName} sessions` });
+  if (picked && picked.action === 'session') {
+    openSession(state, picked.sessionId);
+  }
+}
+
+async function openSession(state, sessionId) {
+  const fleet = state.lastResult.fleet;
+  if (!fleet) {
+    return;
+  }
+  const session = fleet.sessions.find((s) => s.id === sessionId);
+  if (!session) {
+    vscode.window.showInformationMessage('AI Fleet Status: session no longer active.');
+    return;
+  }
+  const term = session.terminal;
+  const terminalLabel = term ? `${term.integrated ? 'integrated' : 'external'}: ${term.name}` : 'OS process (not mapped to a VS Code terminal)';
+  const items = [
+    { label: `$(info) ${session.displayName} · ${session.mode}`, action: 'none' },
+    { label: `Root PID: ${session.rootPid}`, description: terminalLabel, action: 'none' },
+    { label: `Processes: ${session.processCount} · confidence: ${session.confidence}`, action: 'none' }
+  ];
+  if (term && term.integrated) {
+    items.push({ label: '$(arrow-right) Reveal terminal', action: 'reveal' });
+  }
+  items.push({ label: '$(clippy) Copy root PID', action: 'copypid' });
+  items.push({ label: '$(clippy) Copy sanitized diagnostics', action: 'diag' });
+  items.push({ label: '$(refresh) Refresh', action: 'refresh' });
+
+  const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Session details' });
+  if (!picked) {
+    return;
+  }
+  if (picked.action === 'reveal') {
+    await revealTerminal(term);
+  } else if (picked.action === 'copypid') {
+    await vscode.env.clipboard.writeText(String(session.rootPid));
+    vscode.window.showInformationMessage(`Copied root PID ${session.rootPid}`);
+  } else if (picked.action === 'diag') {
+    copyDiagnostics(state, state._output);
+  } else if (picked.action === 'refresh') {
+    schedulePoll(state, 0);
+  }
+}
+
+async function revealTerminal(termMeta) {
+  if (!termMeta) {
+    return;
+  }
+  await revealTerminalByName(termMeta.name);
+}
+
+async function copyRootPid(state, sessionId, output) {
+  const fleet = state.lastResult.fleet;
+  const session = fleet && fleet.sessions.find((s) => s.id === sessionId);
+  if (session) {
+    await vscode.env.clipboard.writeText(String(session.rootPid));
+    vscode.window.showInformationMessage(`Copied root PID ${session.rootPid}`);
+  }
+}
+
+async function copyDiagnostics(state, output) {
+  const diag = buildDiagnostics({
+    version: require('./package.json').version,
+    platform: process.platform,
+    arch: process.arch,
+    scope: state.scope,
+    tools: state.tools,
+    fleet: state.lastResult.fleet || emptyFleet(state.tools),
+    lastError: state.lastResult.error,
+    pollLatencyMs: state.pollLatencyMs,
+    wslScanned: false
+  });
+  const text = diagnosticsAsText(diag);
+  await vscode.env.clipboard.writeText(text);
+  vscode.window.showInformationMessage('Sanitized AI Fleet Status diagnostics copied to clipboard.');
+  if (output) {
+    output.appendLine(`[${new Date().toISOString()}] diagnostics copied (sanitized; no command lines, prompts, or secrets)`);
+  }
+}
+
+function emptyFleet(tools) {
+  const map = new Map();
+  for (const detector of tools) {
+    map.set(detector.id, { id: detector.id, displayName: detector.displayName, sessions: [], services: [] });
+  }
+  return { tools: map, sessions: [], toolCount: 0, sessionCount: 0, processCount: 0, totalMemberProcesses: 0, _graph: null };
 }
 
 function disposeState(state) {
   state.disposed = true;
-
   if (state.pollTimer) {
     clearTimeout(state.pollTimer);
     state.pollTimer = null;
   }
-
   for (const child of state.currentChildren) {
     try {
       child.kill();
-    } catch {
-      // Already exited - nothing to do.
-    }
+    } catch { /* already exited */ }
   }
-
   state.currentChildren.clear();
 }
 
@@ -316,6 +651,5 @@ function deactivate() {}
 module.exports = {
   activate,
   deactivate,
-  // Exported for tests only - not part of the extension's runtime API surface.
-  _internal: { summarizeActiveTools }
+  _internal: { summarizeStatusBar, buildTooltip, emptyFleet, detectScope }
 };

@@ -2,7 +2,7 @@
   "name": "ai-fleet-status",
   "displayName": "AI Fleet Status",
   "description": "Status bar monitor for background AI CLI agent processes (Codex, Claude Code, Gemini CLI, and more) — user-configurable, cross-platform, zero dependencies.",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "publisher": "local",
   "license": "MIT",
   "private": true,
@@ -14,6 +14,7 @@
     "vscode": "^1.85.0",
     "node": ">=18"
   },
+  "extensionKind": ["ui", "workspace"],
   "categories": [
     "Other"
   ],
@@ -41,8 +42,45 @@
       {
         "command": "aiFleetStatus.refresh",
         "title": "AI Fleet Status: Refresh Now"
+      },
+      {
+        "command": "aiFleetStatus.openFleetExplorer",
+        "title": "AI Fleet Status: Open Fleet Explorer"
+      },
+      {
+        "command": "aiFleetStatus.copyDiagnostics",
+        "title": "AI Fleet Status: Copy Sanitized Diagnostics"
+      },
+      {
+        "command": "aiFleetStatus.openSession",
+        "title": "AI Fleet Status: Open Session"
+      },
+      {
+        "command": "aiFleetStatus.copyRootPid",
+        "title": "AI Fleet Status: Copy Root PID"
+      },
+      {
+        "command": "aiFleetStatus.revealTerminal",
+        "title": "AI Fleet Status: Reveal Terminal"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "aiFleetStatus",
+          "title": "AI Fleet",
+          "icon": "$(rocket)"
+        }
+      ]
+    },
+    "views": {
+      "aiFleetStatus": [
+        {
+          "id": "aiFleetStatus.fleetExplorer",
+          "name": "Fleet Explorer"
+        }
+      ]
+    },
     "configuration": {
       "title": "AI Fleet Status",
       "properties": {
@@ -54,61 +92,82 @@
             {
               "name": "Codex",
               "processNames": ["codex.exe", "codex"],
-              "actionKeywords": ["exec"],
-              "nodeIdentityFragments": ["codex", "codex.cmd", "codex.exe", "codex.js"]
+              "nodeIdentityFragments": ["codex", "codex.cmd", "codex.exe", "codex.js"],
+              "serviceSubcommands": ["mcp-server", "app-server", "remote-control", "exec-server", "app"],
+              "delegatedFlags": ["exec", "review", "apply", "-e"],
+              "resumeSubcommands": ["--resume", "--last"]
             },
             {
               "name": "OpenCode",
               "processNames": ["opencode.exe", "opencode"],
-              "actionKeywords": ["run"],
-              "nodeIdentityFragments": ["opencode", "opencode.cmd", "opencode.exe", "opencode.js", "opencode.mjs", "opencode-ai"]
+              "nodeIdentityFragments": ["opencode", "opencode.cmd", "opencode.exe", "opencode.js", "opencode.mjs", "opencode-ai"],
+              "serviceSubcommands": ["serve", "web", "acp", "attach"],
+              "delegatedFlags": ["run"],
+              "resumeSubcommands": ["--resume", "--continue", "--fork"]
+            },
+            {
+              "name": "OpenCode 2",
+              "processNames": ["opencode2.exe", "opencode2"],
+              "nodeIdentityFragments": ["opencode2", "opencode2.cmd", "opencode2.exe", "opencode2.js", "opencode2.mjs", "@opencode-ai/cli"],
+              "serviceSubcommands": ["serve", "web", "acp", "attach"],
+              "delegatedFlags": ["run", "mini"],
+              "resumeSubcommands": ["--resume", "--continue", "--fork"]
             },
             {
               "name": "Hermes",
               "processNames": ["hermes.exe", "hermes"],
-              "actionKeywords": ["-z"],
-              "nodeIdentityFragments": ["hermes", "hermes.cmd", "hermes.exe", "hermes.js", "hermes-agent"]
+              "nodeIdentityFragments": ["hermes", "hermes.cmd", "hermes.exe", "hermes.js", "hermes-agent"],
+              "serviceSubcommands": ["serve", "dashboard", "gui", "desktop", "acp", "gateway", "proxy", "mcp", "webhook", "monitoring", "portal", "profile"],
+              "delegatedFlags": ["-z"],
+              "resumeSubcommands": ["--resume", "--continue"]
             },
             {
               "name": "Antigravity",
               "processNames": ["agy.exe", "agy"],
-              "actionKeywords": ["-p", "--print(?:=[^\\s\"']*)?"],
-              "nodeIdentityFragments": ["agy", "agy.cmd", "agy.exe", "agy.js"]
+              "nodeIdentityFragments": ["agy", "agy.cmd", "agy.exe", "agy.js"],
+              "serviceSubcommands": ["mcp", "mic-serve"],
+              "delegatedFlags": ["-p", "--print", "--prompt"],
+              "resumeSubcommands": ["-c", "--continue", "--conversation"]
             },
             {
               "name": "Claude Code",
               "processNames": ["claude.exe", "claude"],
-              "actionKeywords": ["-p", "--print(?:=[^\\s\"']*)?"],
-              "nodeIdentityFragments": ["claude", "claude.cmd", "claude.exe", "@anthropic-ai/claude-code"]
+              "nodeIdentityFragments": ["claude", "claude.cmd", "claude.exe", "@anthropic-ai/claude-code"],
+              "delegatedFlags": ["-p", "--print", "--prompt"],
+              "resumeSubcommands": ["--resume", "--continue", "-c", "-r"]
             },
             {
               "name": "Gemini CLI",
               "processNames": ["gemini.exe", "gemini"],
-              "actionKeywords": ["-p", "--prompt(?:=[^\\s\"']*)?"],
-              "nodeIdentityFragments": ["gemini", "gemini.cmd", "@google/gemini-cli", "bundle/gemini.js"]
+              "nodeIdentityFragments": ["gemini", "gemini.cmd", "@google/gemini-cli", "bundle/gemini.js"],
+              "delegatedFlags": ["-p", "--prompt"],
+              "resumeSubcommands": ["--resume", "--continue", "-c", "-r"]
             },
             {
               "name": "Qwen Code",
               "processNames": ["qwen.exe", "qwen"],
-              "actionKeywords": ["-p"],
-              "nodeIdentityFragments": ["qwen", "qwen.cmd", "@qwen-code/qwen-code", "cli-entry.js"]
+              "nodeIdentityFragments": ["qwen", "qwen.cmd", "@qwen-code/qwen-code", "cli-entry.js"],
+              "delegatedFlags": ["-p", "-i"],
+              "resumeSubcommands": ["--resume", "--continue", "-c", "-r"]
             },
             {
               "name": "Goose",
               "processNames": ["goose.exe", "goose"],
-              "actionKeywords": ["run", "--resume", "--session-id"],
-              "nodeIdentityFragments": ["goose"]
+              "nodeIdentityFragments": ["goose"],
+              "serviceSubcommands": ["serve"],
+              "delegatedFlags": ["run"],
+              "resumeSubcommands": ["--resume", "--session-id"]
             },
             {
               "name": "Kiro CLI",
               "processNames": ["kiro-cli.exe", "kiro-cli"],
-              "actionKeywords": ["chat"],
-              "nodeIdentityFragments": ["kiro-cli"]
+              "nodeIdentityFragments": ["kiro-cli"],
+              "delegatedFlags": ["chat"]
             }
           ],
           "items": {
             "type": "object",
-            "required": ["name", "processNames", "actionKeywords"],
+            "required": ["name", "processNames"],
             "properties": {
               "name": {
                 "type": "string",
@@ -125,7 +184,25 @@
                 "type": "array",
                 "minItems": 1,
                 "items": { "type": "string", "minLength": 1 },
-                "description": "Flags/subcommands that must appear as their own token in the command line, e.g. [\"-p\", \"--print\"]. Matched as regex source, so escape regex-special characters if a keyword needs to be literal."
+                "description": "OPTIONAL. Flags/subcommands that, when present, help classify the invocation mode (e.g. -p => delegated). This is now a HINT only — a matching process name already implies a session. Values are treated as literal tokens, not regular expressions."
+              },
+              "serviceSubcommands": {
+                "type": "array",
+                "default": [],
+                "items": { "type": "string", "minLength": 1 },
+                "description": "Subcommands (e.g. [\"serve\", \"acp\", \"mcp-server\", \"dashboard\", \"web\"]) that indicate a daemon/server mode. Processes in this mode are reported as SERVICES, not as user sessions."
+              },
+              "delegatedFlags": {
+                "type": "array",
+                "default": [],
+                "items": { "type": "string", "minLength": 1 },
+                "description": "Flags (e.g. [\"-p\", \"--print\", \"-z\", \"--prompt\"]) that mark a non-interactive / delegated one-shot invocation."
+              },
+              "resumeSubcommands": {
+                "type": "array",
+                "default": [],
+                "items": { "type": "string", "minLength": 1 },
+                "description": "Subcommands/flags (e.g. [\"--resume\", \"--continue\", \"-c\", \"-r\"]) that mark a resumed/continued session."
               },
               "nodeIdentityFragments": {
                 "type": "array",
@@ -146,6 +223,16 @@
           "type": "boolean",
           "default": false,
           "description": "Hide the status bar item entirely when no configured tool is currently running."
+        },
+        "aiFleetStatus.enableTerminalCorrelation": {
+          "type": "boolean",
+          "default": true,
+          "description": "Map AI sessions to the integrated VS Code terminal whose shell spawned them (when shell integration is available). External sessions are still shown as OS processes."
+        },
+        "aiFleetStatus.enableSessionNotifications": {
+          "type": "boolean",
+          "default": false,
+          "description": "OPT-IN. Show a non-spammy notification when the fleet gains or loses its first/last session. Off by default to avoid notification noise."
         }
       }
     }
