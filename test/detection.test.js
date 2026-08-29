@@ -111,6 +111,64 @@ test('kiro bare invocation is detected (no chat token required)', () => {
   assert.ok(tui, 'kiro --tui must be detected');
 });
 
+// ---------------------------------------------------------------------------
+// Community CLI built-ins (issue #9): Aider, Amp, Crush, Copilot CLI
+// ---------------------------------------------------------------------------
+test('community CLIs: Aider detected as a session (native + python-hosted)', () => {
+  const tools = compileTools(undefined);
+  const native = detect({ Name: 'aider.exe', CommandLine: 'aider.exe' }, tools);
+  assert.ok(native, 'aider.exe native binary must be detected');
+  assert.equal(native.toolId, 'aider');
+  assert.equal(native.mode, 'interactive');
+  const viaPython = detect({ Name: 'python.exe', CommandLine: 'python.exe -m aider' }, tools);
+  assert.ok(viaPython, 'python -m aider must be detected as Aider');
+  assert.equal(viaPython.toolId, 'aider');
+  const delegated = detect({ Name: 'aider.exe', CommandLine: 'aider.exe -m "refactor"' }, tools);
+  assert.equal(delegated.mode, 'delegated', 'aider -m is a one-shot delegated run');
+});
+
+test('community CLIs: Amp detected as a session', () => {
+  const tools = compileTools(undefined);
+  const bare = detect({ Name: 'amp.exe', CommandLine: 'amp.exe' }, tools);
+  assert.ok(bare, 'amp.exe must be detected');
+  assert.equal(bare.toolId, 'amp');
+  assert.equal(bare.mode, 'interactive');
+  const resumed = detect({ Name: 'amp', CommandLine: 'amp -c' }, tools);
+  assert.equal(resumed.mode, 'resume', 'amp -c resumes a session');
+  const delegated = detect({ Name: 'amp', CommandLine: 'amp --print "explain"' }, tools);
+  assert.equal(delegated.mode, 'delegated');
+});
+
+test('community CLIs: Crush detected as a session', () => {
+  const tools = compileTools(undefined);
+  const bare = detect({ Name: 'crush', CommandLine: 'crush' }, tools);
+  assert.ok(bare, 'crush must be detected');
+  assert.equal(bare.toolId, 'crush');
+  assert.equal(bare.mode, 'interactive');
+  const delegated = detect({ Name: 'crush', CommandLine: 'crush --prompt "fix"' }, tools);
+  assert.equal(delegated.mode, 'delegated');
+});
+
+test('community CLIs: GitHub Copilot CLI detected as a session', () => {
+  const tools = compileTools(undefined);
+  const bare = detect({ Name: 'copilot', CommandLine: 'copilot chat' }, tools);
+  assert.ok(bare, 'copilot must be detected');
+  assert.equal(bare.toolId, 'copilot');
+  assert.equal(bare.mode, 'interactive');
+  const resumed = detect({ Name: 'copilot.exe', CommandLine: 'copilot.exe --continue' }, tools);
+  assert.equal(resumed.mode, 'resume', 'copilot --continue resumes');
+  const delegated = detect({ Name: 'copilot', CommandLine: 'copilot -p "explain"' }, tools);
+  assert.equal(delegated.mode, 'delegated');
+});
+
+test('community CLIs: all four are present in the built-in detector set', () => {
+  const tools = compileTools(undefined);
+  const ids = new Set(tools.map((t) => t.id));
+  for (const id of ['aider', 'amp', 'crush', 'copilot']) {
+    assert.ok(ids.has(id), `built-in detector missing: ${id}`);
+  }
+});
+
 test('qwen via node shim matches by path fragment, both entrypoints', () => {
   const tools = compileTools(undefined);
   const cli = detect({ Name: 'node.exe', CommandLine: 'node.exe C:/x/@qwen-code/qwen-code/cli.js -p hi' }, tools);
