@@ -303,3 +303,21 @@ real source before any fix was applied.
 
 Initial version: Windows-only, 4 hardcoded tools (Codex, OpenCode, Hermes,
 Antigravity), single-file implementation.
+
+## Known limitations (honest, as of v0.3.5)
+
+- **Scope**: the extension observes the **extension-host machine** only. External
+  sessions (Windows Terminal, WSL, tmux, SSH) are honestly shown as OS processes.
+  WSL per-distro enumeration is **deferred** (issue #8 — human NO-GO decision;
+  requires starting distros and risks destabilizing the core).
+- **macOS start-time / PID-reuse identity**: Linux PID-reuse disambiguation was
+  closed via real `/proc/<pid>/stat` starttime (v0.3.4, issue #17). macOS has no
+  `/proc`, so a PID reused with the **same parent AND identical command line** can
+  still collapse into one session id there. Bounded and documented; not silently
+  wrong.
+- **Terminal correlation** depends on VS Code `Terminal.processId` being available;
+  sessions we cannot tie to a terminal are reported as "External / OS process".
+- **Mode detection** is best-effort: unknown-mode matches are reported as *live*,
+  never as *working/thinking*.
+- **Cross-platform parity**: Windows captures a real `CreationDate`; Unix/Linux
+  estimate start time from `/proc` (Linux) and have no age on macOS.

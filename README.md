@@ -1,5 +1,7 @@
 # AI Fleet Status
 
+> **Current version: v0.3.5** — branch `main`, **144 tests green** (8 suites, 0 fail). Scope: the extension-host machine only. Open items: issue #8 (WSL per-distro enumeration — human **NO-GO** decision) and a documented macOS start-time limitation (see CHANGELOG "Known limitations").
+
 A VS Code status bar item **and Fleet Explorer Tree View** that show which AI
 coding CLI agents (Codex, Claude Code, Gemini CLI, Hermes, Qwen Code, and more)
 are currently alive on your machine — how many **independent live sessions** each
@@ -17,6 +19,19 @@ $(warning) AI: poll error              <- the last poll failed; click for the re
 Click the status bar item (or open the **Fleet Explorer** in the Activity Bar)
 for a drill-down: active tools → their sessions → process chains, plus actions to
 reveal the owning terminal, copy a root PID, or copy sanitized diagnostics.
+
+## Status
+
+- **Version**: v0.3.5 (branch `main`), **144 tests green** across 8 `node:test` suites, 0 fail.
+- **Scope**: observes the **extension-host machine** only. External sessions
+  (Windows Terminal, WSL, tmux, SSH) are reported honestly as OS processes.
+- **Open items** (by design, not regressions):
+  - Issue **#8** — WSL per-distro enumeration. **NO-GO**: a human decision is
+    required (it would start WSL distros and risks destabilizing the core).
+  - macOS has no `/proc`, so a PID reused with the same parent + argv can still
+    collapse into one session id (Linux was closed via `/proc` starttime in v0.3.4,
+    issue #17). Documented limitation, not a silent bug.
+- **Backlog**: see `BACKLOG.md` (Phases A–E). No speculative features are tracked.
 
 ## Why
 
