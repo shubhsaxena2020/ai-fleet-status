@@ -9,7 +9,7 @@ const assert = require('node:assert/strict');
 const { SessionLifecycle, MAX_HISTORY } = require('../lib/lifecycle');
 const { buildFleet, sessionId } = require('../lib/sessions');
 const { Process } = require('../lib/process-model');
-const { compileTools: legacyCompileTools } = require('../lib/tool-config');
+const { compileTools, detect } = require('../lib/detect');
 
 // A minimal detector usable by buildFleet: any process whose name matches is a
 // session of tool "claude", interactive mode.
@@ -185,46 +185,45 @@ describe('AFS-04: session identity must not collapse two Unix invocations sharin
   });
 });
 
-describe('AFS-05: legacy tool-config must not compile user regex (ReDoS)', () => {
-  test('a malicious actionKeywords is treated as a literal, not an evil regex', () => {
-    const [tool] = legacyCompileTools(
-      [{ name: 'X', processNames: ['x.exe'], actionKeywords: ['(a+)+$'] }],
-      false // untrusted user input
-    );
-    // The pattern is now the LITERAL string "(a+)+$", escaped, so it only matches that text.
-    assert.equal(tool.actionRegex.test('x.exe (a+)+$'), true, 'literal match still works');
-    assert.equal(tool.actionRegex.test('x.exe aaaa'), false, 'no longer a backtracking pattern');
+describe('AFS-05: live detection path cannot compile user input into a ReDoS', () => {
+  // The legacy lib/tool-config.js compiled user-supplied actionKeywords into
+  // `new RegExp(...)` verbatim — a malicious `(a+)+$` could cause catastrophic
+  // backtracking. That module is retired (BACKLOG B3). The LIVE path
+  // (lib/detect.js) matches user-supplied tokens as LITERAL Set members and
+  // never builds a RegExp from user text, so the ReDoS class is structurally
+  // impossible. This block guards that property against the live code.
+  test('a malicious-looking delegated flag is treated as a literal token, not a regex', () => {
+    const [tool] = compileTools([
+      { name: 'X', processNames: ['x.exe'], delegatedFlags: ['(a+)+$'] }
+    ]);
+    assert.ok(tool, 'tool compiled despite a hostile-looking token');
+    // detect performs no regex; it checks if the token is a member of the Set.
+    // Since (a+)+$ does not start with '-', detect classifies this as an interactive session.
+    const matched = detect({ Name: 'x.exe', CommandLine: 'x.exe (a+)+$' }, tool);
+    assert.ok(matched, 'native binary matches regardless of token contents');
+    assert.equal(matched.mode, 'interactive', 'token is not treated as a flag if it does not start with -');
   });
 
-  test('the old ReDoS payload does not hang (bounded completion)', () => {
-    const [tool] = legacyCompileTools(
-      [{ name: 'X', processNames: ['x.exe'], actionKeywords: ['(a+)+$'] }],
-      false
-    );
-    const killer = 'x.exe ' + 'a'.repeat(30) + '!';
+  test('the old ReDoS payload does not hang (bounded completion on the live path)', () => {
+    const [tool] = compileTools([
+      { name: 'X', processNames: ['x.exe'], delegatedFlags: ['(a+)+$'] }
+    ]);
+    const killer = 'x.exe ' + 'a'.repeat(30000) + '!';
     const start = Date.now();
-    const result = tool.actionRegex.test(killer); // would hang for seconds under the old code
+    const result = detect({ Name: 'x.exe', CommandLine: killer }, tool);
     const elapsed = Date.now() - start;
-    assert.equal(result, false, 'malformed payload does not match');
-    assert.ok(elapsed < 2000, `match returned in ${elapsed}ms (no ReDoS hang)`);
+    assert.ok(result, 'match found');
+    assert.ok(elapsed < 2000, `detect returned in ${elapsed}ms (no ReDoS hang)`);
   });
 
-  test('oversized keyword is rejected rather than compiled', () => {
+  test('oversized user token is still safe (literal set member, no regex compile)', () => {
     const huge = 'a'.repeat(5000);
-    const [tool] = legacyCompileTools(
-      [{ name: 'X', processNames: ['x.exe'], actionKeywords: [huge] }],
-      false
-    );
-    // Empty alternation => fail-closed (never matches).
-    assert.equal(tool.actionRegex.test('x.exe ' + huge), false);
-  });
-
-  test('trusted defaults still use real regex syntax (regression guard)', () => {
-    const [tool] = legacyCompileTools(
-      [{ name: 'Claude', processNames: ['claude'], actionKeywords: ['--print(?:=[^\s"\']*)?'] }],
-      true
-    );
-    assert.equal(tool.actionRegex.test('claude --print="x"'), true, 'trusted regex pattern still works');
+    const [tool] = compileTools([
+      { name: 'X', processNames: ['x.exe'], delegatedFlags: [huge] }
+    ]);
+    // No exception thrown during compile; the token is just a literal member.
+    const result = detect({ Name: 'x.exe', CommandLine: 'x.exe ' + huge }, tool);
+    assert.ok(result, 'literal oversized token still matches its own text');
   });
 });
 
