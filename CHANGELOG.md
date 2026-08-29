@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.5 (test hardening: community-CLI fleet integration + real /proc starttime)
+
+Test-only release — no production-code changes. Strengthens coverage for the two
+v0.3.4 features so they are exercised end-to-end rather than only at the `detect()`
+unit level:
+
+- **Community CLIs (issue #9)**: 3 fleet-level tests prove Aider, Amp, Crush, and
+  Copilot CLI each become a real fleet **session** through `buildFleet` (correct
+  `interactive` mode, distinct ids, no cross-tool collapse), that delegated/resume
+  flags classify correctly at fleet level (`amp -c` → resume, `copilot -p` →
+  delegated), and that the python-hosted Aider form (`python -m aider`) groups as an
+  Aider session.
+- **AFS-04 / issue #17**: 1 test exercises the real `estimateUnixStartTimeMs` against
+  the live test process on Linux and asserts the `st<ms>` segment is embedded in the
+  session id via `buildFleet`, plus continuity across re-polls. Skipped on macOS (no
+  `/proc`). Complements the mocked unit tests added in 0.3.4.
+
+Full suite: **144 tests pass, 0 fail** (was 140 in 0.3.4; +4 tests). No new issues.
+
 ## 0.3.4 (community CLIs + stronger Unix session identity)
 
 - **Added (issue #9)**: four widely-used terminal AI agents are now built-in
