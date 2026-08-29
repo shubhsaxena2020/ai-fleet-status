@@ -115,10 +115,52 @@ describe('AFS-04: session identity must not collapse two Unix invocations sharin
     assert.notEqual(id1, id2, 'PID reuse with different parent/argv => distinct session ids (no collapse)');
     assert.ok(id1.includes('fp:') && id2.includes('fp:'), 'fingerprint segment embedded for Unix sessions');
 
-    // Sanity: identical parent+argv reusing the same PID DOES collapse (documented residual).
+    // Sanity: identical parent+argv reusing the same PID, observed as the SAME real
+    // process (same /proc starttime), keeps ONE id (continuity). The residual that
+    // remains is "no process data at all" (rootProc null) — covered by the pollSeq
+    // tiebreaker and the tests below.
     const poll3 = [new Process(123, 42, 'claude', 'claude --foo', null, 'local')];
     const fleet3 = buildFleet(poll3, [claudeDetector()]);
-    assert.equal(fleet3.sessions[0].id, id1, 'identical parent+argv reusing PID cannot be split (residual limitation)');
+    assert.equal(fleet3.sessions[0].id, id1, 'identical parent+argv, same real process => same id (continuity, not flap)');
+  });
+
+  test('AFS-04 #17: reused PID with IDENTICAL parent+argv but a different /proc starttime yields DISTINCT ids', () => {
+    // The prior residual: PID reuse with the same parent AND identical command line
+    // still collapsed, hiding a restart. Adding the real process start epoch
+    // (/proc/<pid>/stat starttime) as the identity tiebreaker splits it — a reused
+    // PID is a NEW process with a NEW start time. We mock estimateUnixStartTimeMs so
+    // the test is deterministic and independent of the host's real pids.
+    const enumerate = require('../lib/enumerate');
+    const real = enumerate.estimateUnixStartTimeMs;
+    function pollWithStartMs(pid, ppid, argv, startMs) {
+      enumerate.estimateUnixStartTimeMs = () => startMs;
+      try {
+        return buildFleet([new Process(pid, ppid, 'claude', argv, null, 'local')], [claudeDetector()]);
+      } finally {
+        enumerate.estimateUnixStartTimeMs = real;
+      }
+    }
+
+    const id1 = pollWithStartMs(123, 42, 'claude --foo', 1700000000000).sessions[0].id;
+    const id2 = pollWithStartMs(123, 42, 'claude --foo', 1700000005000).sessions[0].id; // same pid+parent+argv, NEW process
+
+    assert.ok(id1.includes('st'), 'real start epoch embedded as st<ms> segment on Linux');
+    assert.notEqual(id1, id2, 'reused PID with identical parent+argv but different starttime => DISTINCT ids (#17 fixed)');
+
+    // Continuity: the SAME process across polls keeps ONE id (start time stable).
+    const id1b = pollWithStartMs(123, 42, 'claude --foo', 1700000000000).sessions[0].id;
+    assert.equal(id1, id1b, 'same process (same start time) across polls => same id (no flap)');
+  });
+
+  test('AFS-04 #17: sessionId embeds a real start epoch (st<ms>) when startMs is supplied', () => {
+    // Unit-level proof (revert-verified: old code ignored startMs and produced '?').
+    const a = sessionId('local', 'claude', 123, null, null, null, 1700000000000);
+    const b = sessionId('local', 'claude', 123, null, null, null, 1700000005000);
+    assert.equal(a, 'local:claude:123:st1700000000000', 'start epoch embedded as st<ms>');
+    assert.notEqual(a, b, 'different start times => distinct ids even with identical pid/parent/argv');
+    assert.equal(sessionId('local', 'claude', 123, null, null, null, 1700000000000), a, 'same start time => same id (continuity)');
+    // startMs beats the fp: fallback tier (stronger signal).
+    assert.equal(sessionId('local', 'claude', 123, null, 'p42:ab12', null, 1700000000000), a, 'startMs tier takes precedence over fp: tier');
   });
 });
 
