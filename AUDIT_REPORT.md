@@ -164,8 +164,8 @@ A final 6-agent review (security, privacy, performance, cross-platform, backward
 
 ## Remaining limitations (honest)
 
-- WSL per-distro enumeration not implemented (deferred with evidence).
-- macOS/Linux creation time is not captured from `ps` (PID-reuse disambiguation is strongest on Windows).
+- WSL per-distro enumeration not implemented (deferred with evidence — human-gated NO-GO, issue #8).
+- Windows and the two Unix platforms now each derive a REAL process start epoch for PID-reuse identity: Windows via `Win32_Process.CreationDate`, Linux via `/proc/<pid>/stat` starttime, and **macOS via `getMacOsProcessStartTime` (proc_pidinfo wrapper, locale-pinned `ps -o lstart=` fallback)** — so the AFS-04 macOS gap is closed and a reused PID with identical parent+argv but a different start time yields a distinct session id. The only residual is the fully-degenerate case (PID reused with identical everything AND no live process data at all), which is mitigated by the monotonic `pollSeq` tiebreaker and documented below.
 - VS Code terminal correlation depends on shell integration being available; external sessions are honestly shown as OS processes.
 - Mode detection is best-effort; unknown-mode matches are reported as *live*, never as *working/thinking*.
 
