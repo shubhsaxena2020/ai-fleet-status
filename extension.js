@@ -59,6 +59,11 @@ class FleetTreeDataProvider {
         node.iconPath = new vscode.ThemeIcon('sync~spin');
         node.contextValue = 'aiFleetTool';
         node.tooltip = `${tool.displayName}: ${tool.sessions.length} session(s), ${procTotal} process(es)`;
+        // Carry the UNIQUE, STABLE tool id so child resolution is unambiguous
+        // (AFS-02 family). Two configured tools can share a displayName (e.g. two
+        // "Claude" entries); resolving children by label would make the SECOND node
+        // expand the FIRST tool's sessions. Resolve by id, never by label.
+        node.toolId = tool.id;
         nodes.push(node);
       }
       for (const tool of idle) {
@@ -69,13 +74,16 @@ class FleetTreeDataProvider {
         node.description = 'idle';
         node.iconPath = new vscode.ThemeIcon('circle-slash');
         node.contextValue = 'aiFleetToolIdle';
+        node.toolId = tool.id;
         nodes.push(node);
       }
       return nodes;
     }
 
-    // Under a tool node: show its sessions.
-    const tool = this._findToolByLabel(element.label);
+    // Under a tool node: show its sessions. Resolve by the carried stable toolId
+    // (AFS-02 family): two tools may share a displayName, so matching by label
+    // would collapse both nodes onto the first tool.
+    const tool = this._findToolById(element);
     if (tool && tool.sessions.length > 0) {
       return tool.sessions.map((s) => {
         const node = new vscode.TreeItem(
@@ -123,10 +131,20 @@ class FleetTreeDataProvider {
     return [];
   }
 
-  _findToolByLabel(label) {
-    for (const tool of this.fleet.tools.values()) {
-      if (tool.displayName === label) {
-        return tool;
+  _findToolById(element) {
+    const id = element && element.toolId;
+    if (id != null) {
+      return this.fleet.tools.get(id) || null;
+    }
+    // Back-compat: if a node somehow lacks toolId (older code path), fall back to
+    // an exact displayName match. First-match-by-label is acceptable ONLY as a
+    // fallback and is NOT used for the normal (id-carrying) node path.
+    const label = element && element.label;
+    if (label != null) {
+      for (const tool of this.fleet.tools.values()) {
+        if (tool.displayName === label) {
+          return tool;
+        }
       }
     }
     return null;
