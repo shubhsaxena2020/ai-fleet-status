@@ -52,7 +52,7 @@ describe('json-parse', () => {
 
 describe('tool-config', () => {
   test('compiles the built-in defaults without error', () => {
-    const compiled = compileTools(DEFAULT_TOOLS);
+    const compiled = compileTools(DEFAULT_TOOLS, true);
     assert.equal(compiled.length, DEFAULT_TOOLS.length);
     assert.ok(compiled.every((tool) => tool.actionRegex instanceof RegExp));
   });
@@ -82,7 +82,8 @@ describe('tool-config', () => {
 
   test('[regression] Claude Code and Gemini CLI defaults match the attached --flag=value form', () => {
     const [claude, gemini] = compileTools(
-      DEFAULT_TOOLS.filter((t) => t.name === 'Claude Code' || t.name === 'Gemini CLI')
+      DEFAULT_TOOLS.filter((t) => t.name === 'Claude Code' || t.name === 'Gemini CLI'),
+      true
     );
     assert.ok(claude.actionRegex.test('claude.exe --print="summarize this"'));
     assert.ok(gemini.actionRegex.test('gemini.exe --prompt="summarize this"'));

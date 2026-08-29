@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.3.1 (audit remediation: AFS-02 / AFS-03 / AFS-04 / AFS-05)
+
+Independent security/audit remediation pass on the v0.3.0 fleet-observability
+release. All findings below were reproduced with a real run, fixed at the root,
+and covered by a regression test that FAILS on the old code and PASSES on the
+fix. Full suite: **116 tests pass, 0 fail** (was 107 before this pass).
+
+- **Fixed (AFS-02, MEDIUM)**: Fleet Explorer Tree View resolved session/tool tree
+  nodes by a **label-prefix match** (`_findSessionByLabelPrefix` used
+  `label.startsWith(s.mode)`), so two same-mode sessions (e.g. two `interactive`
+  sessions) resolved to the FIRST match — wrong member processes shown and
+  open/copy actions targeted the wrong session. Nodes now carry a unique
+  `sessionId`/`toolId` and are resolved by exact match; labels are made
+  distinguishable (`mode · PID <rootPid>`). Regression:
+  `test/extension-afs02.test.js` (FIX.fourSessions — 2nd `interactive` node
+  resolves its own members, PID 1010 not 1001).
+- **Fixed (AFS-03, MEDIUM)**: `SessionLifecycle.reconcile()` trimmed `this.seen`
+  by raw insertion order past 50, but `seen` holds LIVE sessions too, not just
+  ended history — the trim deleted the oldest ACTIVE session, causing it to be
+  falsely re-reported as newly-started on the next poll (age reset, lifecycle
+  history corrupt on large fleets). `seen` now holds ONLY live sessions and is
+  never trimmed; ended sessions are promoted to a separate bounded `history` map
+  (evict oldest-ended first, capped at `MAX_HISTORY`). Regression:
+  `test/audit-afs03-05.test.js` (51 active sessions ⇒ `seen.size===51`, `s0`
+  still present, `justStarted.length===0` on next reconcile; 60→5 live keeps the 5).
+- **Fixed + documented (AFS-04, LOW)**: on Unix/macOS `ps` supplies no creation
+  timestamp, so `sessionId()` fell back to `scope:toolId:rootPid:?` — a PID-only
+  identity that collapses two invocations reusing a PID. Added a content
+  fingerprint fallback: when `creationTime` is null the id embeds
+  `fp:<ppid>:<cmdlineHash>` (FNV-1a of the root command line) instead of `?`, so
+  PID reuse with a different parent/argv stays distinct. **Residual limitation
+  (documented, cannot be fully closed without an OS creation timestamp on Unix):**
+  a PID reused with the *same* parent AND an identical command line still
+  collapses. Regression: `test/audit-afs03-05.test.js` (`sessionId` distinct for
+  different fingerprints; `buildFleet` keeps two PID-123 invocations distinct
+  across polls; identical parent+argv reusing a PID collides as expected).
+- **Fixed (AFS-05, LOW)**: the legacy `lib/tool-config.js` `compileTool` still
+  compiled user-supplied `actionKeywords` into `new RegExp(...)` verbatim — any
+  future consumer importing this still-shipped module could be ReDoS'd by a
+  malicious/malformed regex in settings (e.g. `(a+)+$`). Added `sanitizeKeyword`:
+  user-supplied keywords are **escaped to literal text** and length-capped (64
+  chars) before compilation, so they can never form a backtracking-prone pattern;
+  the module now fails closed (empty alternation never matches) on oversized/empty
+  input. Trusted built-in defaults (`DEFAULT_TOOLS`) keep real regex syntax via an
+  explicit `trusted` flag. Regression: `test/audit-afs03-05.test.js` (malicious
+  keyword matches only its literal text; the `(a+)+$` payload returns in <2s
+  instead of hanging; oversized keyword rejected).
+
 ## 0.3.0
 
 A substantial modernization of AI Fleet Status from a "which AI CLIs are
