@@ -62,7 +62,12 @@ real local install.
   sessions on their own; they only appear in a process chain as evidence of
   ancestry.
 - Session identity is `scope:toolId:rootPid:creationTime` (Windows `CreationDate`
-  disambiguates recycled PIDs), not PID alone.
+  disambiguates recycled PIDs), not PID alone. On Unix/macOS `ps` gives no
+  creation timestamp, so the id embeds a content fingerprint `fp:<ppid>:<cmdlineHash>`
+  (parent PID + command-line hash) instead of `?` — PID reuse with different
+  parent/argv stays distinct. (If a PID is reused with the SAME parent and an
+  identical command line, the two invocations still collapse — a documented
+  residual limitation.)
 
 ## Status bar and Fleet Explorer
 
@@ -81,7 +86,10 @@ real local install.
   `CreationDate` for PID-reuse resistance.
 - **macOS / Linux**: two-stage `ps` — `comm` for every process (cheap), then
   `args` only for candidate PIDs and required ancestors (privacy/perf: avoids
-  reading every command line on the machine).
+  reading every command line on the machine). On Linux, a session's start time
+  (and therefore its displayed age) is estimated from `/proc/<pid>/stat`
+  `starttime` + `/proc/uptime` (read-only; macOS has no `/proc`, so age is shown
+  as unavailable there, same as before).
 - Both paths normalize to the same
   `{ProcessId, ParentProcessId, Name, CommandLine, CreationDate}` shape before
   detection logic runs, so detection is platform-agnostic.
@@ -90,7 +98,7 @@ real local install.
 
 | Setting | Default | Description |
 |---|---|---|
-| `aiFleetStatus.tools` | 9 built-in tools (see `package.json`) | Array of tool descriptors (see schema below). Setting this **replaces** the default list — include the defaults you still want alongside your addition. |
+| `aiFleetStatus.tools` | 10 built-in tools (see `package.json`) | Array of tool descriptors (see schema below). Setting this **replaces** the default list — include the defaults you still want alongside your addition. |
 | `aiFleetStatus.pollInterval` | `5000` | Poll interval in ms while the window is focused. Unfocused windows poll 3× less often. |
 | `aiFleetStatus.hideWhenIdle` | `false` | Hide the status bar item entirely when nothing configured is running. |
 | `aiFleetStatus.enableTerminalCorrelation` | `true` | Map AI sessions to the integrated terminal that spawned them (needs shell integration). External sessions still shown. |

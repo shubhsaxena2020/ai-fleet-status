@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.3.2 (cross-platform age + detection hardening)
+
+- **Added**: Unix/Linux session start-time estimation. `ps` gives no wall-clock
+  creation time, so every Unix session previously rendered with **no age** in the
+  status bar and Fleet Explorer while Windows showed a real one. `listUnixProcesses`
+  now derives a start time from `/proc/<pid>/stat` `starttime` + `/proc/uptime`
+  (read-only; no process spawn; macOS has no `/proc`, so age stays unavailable
+  there as before). This fills in a real display age and does NOT change session
+  identity (the AFS-04 content fingerprint still drives PID-reuse disambiguation).
+  Regression: `test/unix-age.test.js`.
+- **Fixed**: Unix start-time estimate was unstable across polls — it recomputed
+  `Date.now() - /proc/uptime` each call, and the coarse uptime granularity let the
+  derived boot epoch drift, jittering the start time and risking a session-id flap.
+  The boot epoch is now cached for the process lifetime (stable per PID, distinct
+  across PIDs). Regression: `test/unix-age-stability.test.js`.
+- **Fixed (detection)**: Claude Code's built-in detector could not identify its own
+  npm-shim form `node .../@anthropic-ai/claude-code/cli.js` (no `interpreterHosted`
+  entry), and Qwen's fragment set included a bare `cli.js` single-segment fragment
+  that over-matched any `cli.js` path — together, a Claude shim was mis-classified
+  as Qwen, corrupting tool/session counts. Added `interpreterHosted` to the Claude
+  Code built-in (path-bounded fragments) and dropped Qwen's bare `cli.js` fragment
+  (its real shim is still matched by `@qwen-code/qwen-code`). Regression:
+  `test/adversarial-session-count.test.js`.
+- **Docs**: corrected README drift — there are **10** built-in detectors (not 9;
+  OpenCode 2 was added), documented the Unix session-id fingerprint fallback and the
+  Linux age estimation, and aligned the "How detection works" / "Cross-platform"
+  sections with the shipping code.
+
 ## 0.3.1 (audit remediation: AFS-02 / AFS-03 / AFS-04 / AFS-05)
 
 Independent security/audit remediation pass on the v0.3.0 fleet-observability
