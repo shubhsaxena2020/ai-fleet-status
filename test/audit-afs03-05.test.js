@@ -138,9 +138,29 @@ describe('AFS-05: legacy tool-config must not compile user regex (ReDoS)', () =>
 
   test('trusted defaults still use real regex syntax (regression guard)', () => {
     const [tool] = legacyCompileTools(
-      [{ name: 'Claude', processNames: ['claude'], actionKeywords: ['--print(?:=[^\\s"\']*)?'] }],
+      [{ name: 'Claude', processNames: ['claude'], actionKeywords: ['--print(?:=[^\s"\']*)?'] }],
       true
     );
     assert.equal(tool.actionRegex.test('claude --print="x"'), true, 'trusted regex pattern still works');
+  });
+});
+
+// Adversarial-pass regression (AFS-03 area): SessionLifecycle.reconcile() must NOT
+// throw on a null/undefined/malformed fleet. A bad fleet passed to reconcile would
+// otherwise abort the whole poll (the AFS-01 impact class: one bad fleet kills
+// detection/notification for ALL sessions). It now degrades to "no current
+// sessions" instead of throwing.
+describe('AFS-03 area: reconcile() tolerates null/undefined/malformed fleet', () => {
+  test('reconcile(null/undefined/{}) does not throw', () => {
+    for (const bad of [null, undefined, {}]) {
+      const life = new SessionLifecycle(() => 1000);
+      assert.doesNotThrow(() => life.reconcile(bad), `reconcile(${JSON.stringify(bad)}) must not throw`);
+    }
+    // And a previously-live session is reported ended (graceful degradation), not leaked.
+    const life = new SessionLifecycle(() => 1000);
+    life.reconcile({ sessions: [{ id: 'live1', toolId: 'claude', rootPid: 1, mode: 'interactive' }] });
+    life.reconcile(null); // simulate a failed poll
+    assert.equal(life.seen.has('live1'), false, 'live1 correctly reported ended after a failed poll');
+    assert.equal(life.justEnded.length, 1, 'the dropped live session is reported as ended, not thrown');
   });
 });
