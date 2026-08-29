@@ -106,7 +106,54 @@ async function main() {
   if (firstPid !== '1001') fail('expanding 1st interactive node resolved pid ' + firstPid + ', expected 1001');
 
   console.log('AFS-02 OK: two same-mode sessions resolve to distinct own members via unique sessionId (PID ' + firstPid + ' vs ' + resolvedPid + ').');
+}
+
+// AFS-02 (tool-layer residual, same first-match-by-label class): two CONFIGURED
+// tools that share a displayName must NOT collapse onto the first tool in the
+// Fleet Explorer. Before the fix, every tool node resolved its children via
+// _findToolByLabel(element.label) — an exact displayName match — so the SECOND
+// "Claude" node expanded to the FIRST tool's sessions. Now tool nodes carry a
+// stable toolId and getChildren resolves by id.
+//
+// Drives the LIVE FleetTreeDataProvider (enumerate stubbed) with a hand-built
+// fleet of two tools both named "Claude" but with distinct ids/sessions, and
+// asserts each tool node expands to its OWN session's members.
+function fail2(msg) { throw new Error('AFS-02 TOOL-COLLISION REGRESSION: ' + msg); }
+
+async function mainToolCollision() {
+  ext.activate({ subscriptions: [], extensionMode: 1, extensionPath: __dirname });
+  const provider = treeView ? treeView.view : null;
+  if (!provider) fail2('could not reach the FleetTreeDataProvider');
+
+  // Two tools, same displayName "Claude", distinct ids and sessions.
+  const fleet = { tools: new Map(), sessions: [] };
+  function mk(toolId, pid) {
+    const tool = { id: toolId, displayName: 'Claude', sessions: [] };
+    const ses = { id: `local:${toolId}:${pid}:1000`, displayName: toolId, mode: 'interactive', rootPid: pid, processCount: 1, confidence: 'high', isNew: false, startAgeMs: 5, members: [{ name: 'proc' + pid, pid, commandLine: 'cmd ' + pid }] };
+    tool.sessions.push(ses);
+    fleet.tools.set(toolId, tool);
+    fleet.sessions.push(ses);
+    return tool;
+  }
+  mk('ClaudeA', 5001);
+  mk('ClaudeB', 5002);
+  provider.fleet = fleet;
+
+  const toolNodes = provider.getChildren(null).filter((n) => n.label === 'Claude');
+  if (toolNodes.length !== 2) fail2('expected 2 tool nodes labeled "Claude", got ' + toolNodes.length);
+
+  const seen = [];
+  for (let i = 0; i < toolNodes.length; i++) {
+    const members = provider.getChildren(toolNodes[i]);
+    if (!Array.isArray(members) || members.length === 0) fail2('tool node #' + (i + 1) + ' expanded to no members');
+    const pid = members[0].description.match(/PID (\d+)/)[1];
+    seen.push(pid);
+  }
+  // Each node must resolve to its OWN session, never both to the first tool.
+  if (seen[0] === seen[1]) fail2('both "Claude" tool nodes resolved to the same session (PID ' + seen[0] + ') — tool-label collision');
+  if (seen[0] !== '5001' || seen[1] !== '5002') fail2('unexpected resolutions: ' + JSON.stringify(seen));
+  console.log('AFS-02 TOOL-COLLISION OK: two same-displayName tools resolve to their own sessions (PID ' + seen[0] + ' vs ' + seen[1] + ').');
   process.exit(0);
 }
 
-main().then(() => process.exit(0)).catch((e) => { console.error('FAIL:', e.message); process.exit(1); });
+main().then(() => mainToolCollision()).then(() => process.exit(0)).catch((e) => { console.error('FAIL:', e.message); process.exit(1); });
