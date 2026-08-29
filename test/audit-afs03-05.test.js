@@ -162,6 +162,27 @@ describe('AFS-04: session identity must not collapse two Unix invocations sharin
     // startMs beats the fp: fallback tier (stronger signal).
     assert.equal(sessionId('local', 'claude', 123, null, 'p42:ab12', null, 1700000000000), a, 'startMs tier takes precedence over fp: tier');
   });
+
+  test('AFS-04 #17: real Linux /proc starttime is embedded into a live session id (not mocked)', { skip: process.platform === 'darwin' ? 'no /proc on macOS' : false }, () => {
+    // The two unit tests above mock estimateUnixStartTimeMs; this one exercises the
+    // REAL helper against a genuine running process on Linux, proving the st<ms>
+    // segment is produced end-to-end through buildFleet (not just in isolation).
+    const enumerate = require('../lib/enumerate');
+    const realStart = enumerate.estimateUnixStartTimeMs(process.pid);
+    assert.ok(realStart != null && Number.isFinite(realStart), '/proc/<pid>/stat starttime must be readable for this node process on Linux');
+
+    // A detector that matches the node binary (the test runner itself).
+    const nodeDetector = { id: 'nodeagent', displayName: 'Node Agent', processNames: new Set(['node']) };
+    const row = new Process(process.pid, process.ppid, 'node', process.argv.join(' '), null, 'local');
+    const fleet = buildFleet([row], [nodeDetector]);
+    const s = fleet.sessions[0];
+    assert.ok(s, 'this node process is detected as a session of the node detector');
+    assert.ok(s.id.includes(`st${Math.round(realStart)}`), 'session id embeds the real /proc start epoch (st<ms>) on Linux');
+
+    // Continuity: re-polling the SAME live process keeps the SAME id (start time stable).
+    const fleet2 = buildFleet([row], [nodeDetector]);
+    assert.equal(fleet2.sessions[0].id, s.id, 'same live process across polls => same id (no flap)');
+  });
 });
 
 describe('AFS-05: legacy tool-config must not compile user regex (ReDoS)', () => {

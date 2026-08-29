@@ -989,3 +989,63 @@ test('adversarial: buildFleet() tolerates null rows and null detectors', () => {
   assert.doesNotThrow(() => { fleet2 = buildFleet(rows, null); }, 'buildFleet with null detectors must not throw');
   assert.ok(fleet2 && Array.isArray(fleet2.sessions), 'null detectors yields a well-formed fleet');
 });
+
+// ---------------------------------------------------------------------------
+// Community CLI built-ins (issue #9): fleet-level integration.
+// The detect() unit tests above prove each CLI is recognized; these prove they
+// become real fleet SESSIONS (not just detected) and that their member processes,
+// mode, and resume flag are grouped correctly end-to-end through buildFleet.
+// ---------------------------------------------------------------------------
+function findSession(fleet, toolId) {
+  // buildFleet returns sessions directly in fleet.sessions (one entry per root process).
+  return fleet.sessions.find((s) => s.toolId === toolId);
+}
+
+test('community CLIs become real fleet sessions with correct mode (Aider/Amp/Crush/Copilot)', () => {
+  const tools = compileTools(undefined);
+  // Each CLI as a bare root process; buildFleet should group each into one session.
+  const rows = [
+    new Process(1001, 1, 'aider', 'aider', null, 'local'),
+    new Process(1002, 1, 'amp', 'amp', null, 'local'),
+    new Process(1003, 1, 'crush', 'crush', null, 'local'),
+    new Process(1004, 1, 'copilot', 'copilot chat', null, 'local')
+  ];
+  const fleet = buildFleet(rows, tools);
+
+  for (const id of ['aider', 'amp', 'crush', 'copilot']) {
+    const s = findSession(fleet, id);
+    assert.ok(s, `${id} must appear as a fleet session`);
+    assert.equal(s.toolId, id, `${id} session keeps its toolId`);
+    assert.equal(s.mode, 'interactive', `${id} bare invocation is interactive`);
+    assert.ok(s.id.includes(':'), `${id} session has a stable id`);
+  }
+  // All four distinct sessions (no cross-tool collapse).
+  const ids = ['aider', 'amp', 'crush', 'copilot'].map((id) => findSession(fleet, id).id);
+  assert.equal(new Set(ids).size, 4, 'the four community CLIs are distinct sessions');
+});
+
+test('community CLIs: delegated/resume flags classify correctly at fleet level', () => {
+  const tools = compileTools(undefined);
+  // amp -c (resume) and copilot -p (delegated) — must surface on the session.
+  const rows = [
+    new Process(2001, 1, 'amp', 'amp -c', null, 'local'),
+    new Process(2002, 1, 'copilot', 'copilot -p "explain"', null, 'local')
+  ];
+  const fleet = buildFleet(rows, tools);
+  assert.equal(findSession(fleet, 'amp').mode, 'resume', 'amp -c => resume session');
+  assert.equal(findSession(fleet, 'copilot').mode, 'delegated', 'copilot -p => delegated session');
+});
+
+test('community CLIs: Aider python-hosted form grouped as an Aider session', () => {
+  const tools = compileTools(undefined);
+  // python -m aider spawns under a python parent; the python process is the root.
+  const rows = [
+    new Process(3001, 1, 'python', 'python -m aider', null, 'local')
+  ];
+  const fleet = buildFleet(rows, tools);
+  const s = findSession(fleet, 'aider');
+  assert.ok(s, 'python -m aider is grouped as an Aider session');
+  assert.equal(s.toolId, 'aider');
+  assert.equal(s.mode, 'interactive');
+});
+
