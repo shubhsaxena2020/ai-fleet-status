@@ -176,6 +176,7 @@ function activate(context) {
 
   const state = {
     tools: compileConfiguredTools(output),
+    lifecycle,
     lastResult: { fleet: null, checkedAt: null, error: null, lifecycle: null },
     pollInFlight: false,
     pollTimer: null,
