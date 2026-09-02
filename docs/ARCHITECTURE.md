@@ -7,7 +7,7 @@ live OS process list.
 
 ## Data flow
 
-```
+```mermaid
  OS process list
       │   lib/enumerate.js  (listProcesses)
       │   - Windows: one powershell.exe / Win32_Process call, CreationDate captured

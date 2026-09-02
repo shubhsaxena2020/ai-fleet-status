@@ -71,7 +71,7 @@ delegated session count.
 
 A session's runtime id is:
 
-```
+```mermaid
 <scope>:<toolId>:<rootPid>:<creationTime>
 ```
 
