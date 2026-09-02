@@ -1,6 +1,6 @@
 # AI Fleet Status
 
-> **Current version: v0.3.6-macos-starttime** — branch `main`, **173 tests green** (20 suites, 0 fail). Scope: the extension-host machine only. Open item: issue #8 (WSL per-distro enumeration — human **NO-GO** decision). The macOS process start-time gap (AFS-04) is now closed — see below.
+> **Current version: v0.3.8-macos-starttime** — branch `main`, **182 tests green** (20 suites, 0 fail). Scope: the extension-host machine only. Open item: issue #8 (WSL per-distro enumeration — human **NO-GO** decision). The macOS process start-time gap (AFS-04) is now closed — see below.
 
 A VS Code status bar item **and Fleet Explorer Tree View** that show which AI
 coding CLI agents (Codex, Claude Code, Gemini CLI, Hermes, Qwen Code, and more)
@@ -8,13 +8,13 @@ are currently alive on your machine — how many **independent live sessions** e
 one has, how many **processes** belong to those sessions, and (when possible)
 which **VS Code terminal** owns the session.
 
-```
+```mermaid
 $(sync~spin) AI: Claude ×4              <- one tool, 4 sessions
 $(sync~spin) AI: Claude ×4 · Codex ×2  <- two tools, short enough to name
 $(sync~spin) AI: 5 tools · 12 sessions <- large fleet, collapsed to counts
 $(circle-slash) AI: idle               <- nothing running
 $(warning) AI: poll error              <- the last poll failed; click for the reason
-```
+```mermaid
 
 Click the status bar item (or open the **Fleet Explorer** in the Activity Bar)
 for a drill-down: active tools → their sessions → process chains, plus actions to
@@ -22,7 +22,7 @@ reveal the owning terminal, copy a root PID, or copy sanitized diagnostics.
 
 ## Status
 
-- **Version**: v0.3.6-macos-starttime (branch `main`), **173 tests green** across 20 `node:test` suites, 0 fail.
+- **Version**: v0.3.8-macos-starttime (branch `main`), **182 tests green** across 20 `node:test` suites, 0 fail.
 - **Scope**: observes the **extension-host machine** only. External sessions
   (Windows Terminal, WSL, tmux, SSH) are reported honestly as OS processes.
 - **Open items** (by design, not regressions):
@@ -46,6 +46,31 @@ and how many separate sessions you actually have open. This polls the OS process
 list and tells you, at a glance and in detail.
 
 ## Supported out of the box
+
+## Operator Overview
+
+*This section provides a concise plain-terms summary of the operator-facing surface for the rag-service SDK and VS Code extension.*
+
+**Purpose**: Give operators a quick understanding of what the surface can do without reading every detail.
+
+**Main Workflows**:
+- **SDK install & import** — `import { compileTools, detect } from './lib/detect'`; compile the tool registry and detect tools from process fixtures.
+- **Session detection** — buildFleet() groups processes into sessions; rootPid/toolId/creationTime are exposed per session.
+- **Tool registry** — 15 built-in tools available via compileTools(); used for widget config and SDK examples.
+- **Environment switching** — local, staging, and production base URLs with API key configuration.
+- **Error handling** — transient errors (timeout, rate limit) are retryable; fatal errors (not found, auth failed) are not.
+- **Polling** — repeat detect()/buildFleet() calls to wait for session completion; exponential backoff recommended.
+- **Filtering & sorting** — filter sessions by toolId; sort by creationTime descending.
+
+**Key Concepts**:
+- **Tool** — one configured AI CLI (e.g., Claude Code).
+- **Session** — one independent live invocation of a tool; multiple invocations of the same tool are DISTINCT sessions.
+- **Process count** — number of unique tool-owned/helper processes in a session (root + descendants).
+- **Fleet** — the complete state from buildFleet(): tools detected, sessions active, toolCount, sessionCount.
+
+**No stale screenshots**: this is a text-based SDK surface; all information is derived from live process introspection.
+
+
 
 Codex, OpenCode **and OpenCode 2 (`opencode2`)**, Hermes, Antigravity (`agy`),
 Claude Code, Gemini CLI, Qwen Code, Goose, and Kiro CLI — each detected either
@@ -136,7 +161,7 @@ Tool descriptor schema:
   "delegatedFlags": ["-p"],            // OPTIONAL — flags marking non-interactive/delegated mode
   "resumeSubcommands": ["--resume"]    // OPTIONAL — flags marking a resumed session
 }
-```
+```mermaid
 
 `actionKeywords` (the older field) is still accepted and migrated to
 `delegatedFlags`; it is a **hint only**, never a gate — a matching process name
@@ -163,7 +188,7 @@ expressions, so a custom tool cannot cause a regex denial-of-service.
 
 ## Development
 
-```
+```mermaid
 npm test              # run the unit + integration test suite (node:test)
 ```
 
